@@ -1,0 +1,2 @@
+-keep class com.tvmonitor.app.data.Listing { *; }
+-keepclassmembers class com.tvmonitor.app.service.MonitorService$ScraperInterface { *; }
