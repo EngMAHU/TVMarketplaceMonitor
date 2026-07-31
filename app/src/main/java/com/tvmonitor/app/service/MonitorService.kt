@@ -100,8 +100,19 @@ class MonitorService : Service() {
     private val scanJs by lazy { readAsset("scan.js") }
     private val captureJs by lazy { readAsset("capture.js") }
 
+    // A missing or unreadable asset must not take the whole service down. These
+    // are read lazily from inside a WebView callback on the main thread, so an
+    // exception here would surface as the app simply closing, with Android then
+    // blaming WebView for it.
     private fun readAsset(name: String): String =
-        assets.open(name).bufferedReader().use { it.readText() }
+        try {
+            assets.open(name).bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            assetError = "could not read $name: ${e.message}"
+            ""
+        }
+
+    private var assetError: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -150,15 +161,28 @@ class MonitorService : Service() {
                         // has come and gone before anything is watching - which is
                         // exactly how an earlier desktop build ended up with no
                         // timestamps at all.
-                        view.evaluateJavascript(captureJs, null)
+                        try { view.evaluateJavascript(captureJs, null) } catch (e: Exception) { }
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
                         handler.postDelayed({
-                            view.evaluateJavascript(filtersJs, null)
-                            view.evaluateJavascript(
-                                scanJs.replace("__CONFIG__", configJson()), null
-                            )
+                            // Wrapped because this runs on the main thread from a
+                            // WebView callback: anything thrown here closes the
+                            // app, and Android reports that as a WebView fault.
+                            try {
+                                if (assetError != null) {
+                                    isChecking = false
+                                    return@postDelayed
+                                }
+                                view.evaluateJavascript(filtersJs, null)
+                                view.evaluateJavascript(
+                                    scanJs.replace("__CONFIG__", configJson()), null
+                                )
+                            } catch (e: Exception) {
+                                // Free the latch, or no further check is ever run.
+                                isChecking = false
+                                handler.postDelayed(checkRunnable, CHECK_INTERVAL)
+                            }
                         }, RENDER_WAIT)
                     }
 

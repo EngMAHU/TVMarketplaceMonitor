@@ -64,7 +64,32 @@ class MainActivity : AppCompatActivity() {
         logoutBtn.setOnClickListener { logout() }
 
         requestNotifPermission()
+        showLastCrashIfAny()
         updateUI()
+    }
+
+    /**
+     * Shows the stack trace of the previous crash, once, in a dialog that can be
+     * copied out.
+     *
+     * Android's answer to a crash inside a WebView is a prompt offering to
+     * uninstall WebView updates system-wide - which changes every app on the
+     * phone and fixes nothing when the fault is here. With no way to attach a
+     * debugger to this phone, a trace the user can read back is the only route
+     * from "it closes" to a fix.
+     */
+    private fun showLastCrashIfAny() {
+        val crash = App.lastCrash(this) ?: return
+        App.clearCrash(this)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("The app closed unexpectedly")
+            .setMessage(crash.take(3000))
+            .setPositiveButton("Copy") { _, _ ->
+                val cb = getSystemService(android.content.ClipboardManager::class.java)
+                cb.setPrimaryClip(android.content.ClipData.newPlainText("crash", crash))
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     override fun onResume() {
