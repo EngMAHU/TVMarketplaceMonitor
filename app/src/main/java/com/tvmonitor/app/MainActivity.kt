@@ -116,7 +116,7 @@ class MainActivity : AppCompatActivity() {
             )
         )
         statusText.text = if (running)
-            "Monitoring Facebook Marketplace for TVs near Liverpool (60mi) every minute"
+            "Checking the Liverpool and Manchester TV feeds in turn, one every 2.5 minutes"
         else
             "Monitor is stopped. Tap below to start."
     }

@@ -17,6 +17,10 @@
   var CFG = __CONFIG__;
 
   function out(payload) {
+    // Handed back untouched so the service can tell which check this answers.
+    // A scan can reply after the service has already given up waiting for it,
+    // and without this the reply would end whichever check had started since.
+    payload.gen = CFG.gen;
     try { Android.onListingsFound(JSON.stringify(payload)); }
     catch (e) { /* the bridge is gone; nothing useful left to do */ }
   }

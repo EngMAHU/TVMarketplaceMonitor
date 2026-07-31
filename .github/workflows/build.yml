@@ -2,7 +2,11 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    # Development branches build too. Until now only main did, which meant a
+    # change could not be compiled or installed until it had already been
+    # merged - and there is no Android SDK on the machine this is written on,
+    # so this workflow is the only thing that compiles the Kotlin at all.
+    branches: [main, 'claude/**']
   workflow_dispatch:
 
 jobs:

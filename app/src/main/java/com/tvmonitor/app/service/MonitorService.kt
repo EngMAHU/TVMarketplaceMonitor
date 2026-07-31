@@ -16,6 +16,7 @@ import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
 import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.data.Listing
+import com.tvmonitor.app.util.FacebookSession
 import com.tvmonitor.app.util.NotificationHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,15 @@ class MonitorService : Service() {
         // Facebook renders Marketplace results client-side; the HTML shell arrives
         // with nothing in it. Ten seconds is what the desktop scanner needed.
         private const val RENDER_WAIT = 10_000L
+
+        // A check that has reported nothing after this long is not merely slow.
+        // scan.js does not run until RENDER_WAIT has passed, so this leaves fifty
+        // seconds for a load that normally takes a few.
+        private const val CHECK_TIMEOUT = 60_000L
+
+        // While signed out there is nothing worth asking Facebook for, so the
+        // cookie is re-read on this timer and no page is loaded at all.
+        private const val SIGNED_OUT_RETRY = 60_000L
 
         // v15.1's two sources, in v15.1's shape, at the trader's request.
         //
@@ -90,6 +100,12 @@ class MonitorService : Service() {
     private var blankStreak = 0
     private var urlIndex = 0
     private var rendererDeaths = 0
+    private var stalls = 0
+    private var signedOut = false
+
+    // Which check is in flight. Every check gets a new number, and only a report
+    // carrying the current one is allowed to end it - see finishCheck.
+    private var checkGeneration = 0
 
     private val checkRunnable = object : Runnable {
         override fun run() { performCheck() }
@@ -172,17 +188,17 @@ class MonitorService : Service() {
                             // app, and Android reports that as a WebView fault.
                             try {
                                 if (assetError != null) {
-                                    isChecking = false
+                                    finishCheck(checkGeneration, stalled = true)
                                     return@postDelayed
                                 }
                                 view.evaluateJavascript(filtersJs, null)
                                 view.evaluateJavascript(
-                                    scanJs.replace("__CONFIG__", configJson()), null
+                                    scanJs.replace("__CONFIG__", configJson(checkGeneration)),
+                                    null
                                 )
                             } catch (e: Exception) {
                                 // Free the latch, or no further check is ever run.
-                                isChecking = false
-                                handler.postDelayed(checkRunnable, CHECK_INTERVAL)
+                                finishCheck(checkGeneration, stalled = true)
                             }
                         }, RENDER_WAIT)
                     }
@@ -217,8 +233,7 @@ class MonitorService : Service() {
                             try { view.destroy() } catch (e: Exception) { }
                             if (webView === view) webView = null
                             initWebView()
-                            isChecking = false
-                            handler.postDelayed(checkRunnable, CHECK_INTERVAL)
+                            finishCheck(checkGeneration, stalled = true)
                         }
                         return true
                     }
@@ -232,7 +247,10 @@ class MonitorService : Service() {
     // than 45, and the shorter block list from before "faulty", "broken",
     // "cracked", "for parts" were added. Undated listings are held rather than
     // announced, which v15.1 also did.
-    private fun configJson(): String = JSONObject().apply {
+    private fun configJson(generation: Int): String = JSONObject().apply {
+        // Carried through the scan and handed back in its report, so a reply from
+        // a check that was already given up on can be told apart from a live one.
+        put("gen", generation)
         put("minInches", 0)
         put("maxPrice", 0)
         put("maxAgeMinutes", 60)
@@ -246,27 +264,87 @@ class MonitorService : Service() {
     }.toString()
 
     private fun performCheck() {
+        // The session can expire at any time and nothing announces it. A
+        // signed-out reader gets a Marketplace page that renders correctly and
+        // holds no listings, which is indistinguishable from rate limiting, so
+        // without this the monitor would go on scanning a logged-out page and
+        // report it as Facebook being quiet. The cookie costs no request.
+        if (!FacebookSession.isSignedIn()) {
+            if (!signedOut) {
+                signedOut = true
+                NotificationHelper.notifySignedOut(this)
+            }
+            scope.launch { updateServiceNotification() }
+            handler.postDelayed(checkRunnable, SIGNED_OUT_RETRY)
+            return
+        }
+        if (signedOut) {
+            signedOut = false
+            NotificationHelper.clearSignedOut(this)
+        }
+
         if (isChecking) {
             handler.postDelayed(checkRunnable, CHECK_INTERVAL)
             return
         }
         isChecking = true
+        val generation = ++checkGeneration
         val url = URLS[urlIndex % URLS.size]
         urlIndex++
+
+        // The watchdog, and the reason this method now hands out generations.
+        //
+        // Every route out of a check used to depend on something arriving: the
+        // scan reporting, the page finishing, the renderer dying. When none of
+        // them did - a load that hangs, a bridge that never fires - isChecking
+        // stayed latched forever. The service survived that in the worst possible
+        // shape: alive, holding a wake lock, still showing "TV Monitor Active",
+        // and never scanning again. Nothing about it looked wrong from outside.
+        handler.postDelayed({ finishCheck(generation, stalled = true) }, CHECK_TIMEOUT)
+
+        // A null WebView here means one is being rebuilt after a renderer death.
+        // Nothing loads, and the watchdog above is what notices.
         handler.post { webView?.loadUrl(url) }
+    }
+
+    /**
+     * Ends the check in flight and books the next one.
+     *
+     * Every exit from a check comes through here - a scan that reported, a
+     * renderer that died, a page that threw, a load that produced nothing - so
+     * that exactly one of them can win it.
+     *
+     * The generation is what makes that true. Without it, a scan replying five
+     * seconds after the watchdog had given up would end the check that had just
+     * started in its place, and the next reply would start a second loop
+     * alongside the first. A stale number is ignored instead.
+     *
+     * Main thread only: it touches the handler and the check state.
+     */
+    private fun finishCheck(generation: Int, stalled: Boolean) {
+        if (!isChecking || generation != checkGeneration) return
+        checkGeneration++
+        isChecking = false
+        if (stalled) stalls++ else { stalls = 0; checkCount++ }
+        handler.removeCallbacks(checkRunnable)
+        handler.postDelayed(checkRunnable, CHECK_INTERVAL)
+        scope.launch { updateServiceNotification() }
     }
 
     inner class ScraperInterface {
         @JavascriptInterface
         fun onListingsFound(json: String) {
+            // Sent back by scan.js from the config it was given. A report with no
+            // generation, or a stale one, is still worth processing - the listings
+            // in it are real - but it is not allowed to end the current check.
+            val generation = try {
+                JSONObject(json).optInt("gen", -1)
+            } catch (e: Exception) {
+                -1
+            }
             scope.launch {
                 try { processResults(json) } catch (e: Exception) { e.printStackTrace() }
-                finally {
-                    isChecking = false
-                    checkCount++
-                    updateServiceNotification()
-                    handler.postDelayed(checkRunnable, CHECK_INTERVAL)
-                }
+                finally { handler.post { finishCheck(generation, stalled = false) } }
             }
         }
     }
@@ -322,12 +400,25 @@ class MonitorService : Service() {
     private suspend fun updateServiceNotification() {
         val count = db.listingDao().count()
         val time = SimpleDateFormat("HH:mm:ss", Locale.UK).format(Date())
-        val status = if (blankStreak >= 3)
-            "$time - Facebook returning nothing ($blankStreak)" else time
+
+        // The ongoing notification is the only thing the trader sees while the
+        // phone sits in a pocket, so every way this can be failing has to be able
+        // to reach it. Ordered worst first.
+        val state = when {
+            assetError != null -> "not working: $assetError"
+            signedOut -> "signed out - sign in to resume"
+            stalls > 0 -> "$time - no reply from page ($stalls)"
+            blankStreak >= 3 -> "$time - Facebook returning nothing ($blankStreak)"
+            else -> time
+        }
+        // Renderer deaths are survived rather than fatal now, but a phone killing
+        // the page repeatedly is worth knowing about before it becomes constant.
+        val recovered = if (rendererDeaths > 0) " | recovered ${rendererDeaths}x" else ""
+
         val nm = getSystemService(android.app.NotificationManager::class.java)
         nm.notify(
             NotificationHelper.SERVICE_ID,
-            NotificationHelper.serviceNotification(this, count, status)
+            NotificationHelper.serviceNotification(this, count, state + recovered)
         )
     }
 
@@ -336,6 +427,8 @@ class MonitorService : Service() {
         handler.removeCallbacksAndMessages(null)
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
+        // It is ongoing, so it would otherwise outlive the monitor it describes.
+        NotificationHelper.clearSignedOut(this)
         handler.post { webView?.destroy(); webView = null }
         super.onDestroy()
     }

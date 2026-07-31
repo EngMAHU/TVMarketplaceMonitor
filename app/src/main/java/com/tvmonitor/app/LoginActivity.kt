@@ -7,6 +7,7 @@ import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import com.tvmonitor.app.util.FacebookSession
 
 class LoginActivity : AppCompatActivity() {
 
@@ -62,11 +63,7 @@ class LoginActivity : AppCompatActivity() {
         webView.loadUrl("https://www.facebook.com/login")
     }
 
-    private fun isLoggedIn(): Boolean {
-        val cookies = CookieManager.getInstance()
-            .getCookie("https://www.facebook.com") ?: return false
-        return cookies.contains("c_user")
-    }
+    private fun isLoggedIn(): Boolean = FacebookSession.isSignedIn()
 
     private fun goToMain() {
         startActivity(Intent(this, MainActivity::class.java))

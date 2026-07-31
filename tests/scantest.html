@@ -75,7 +75,11 @@ window.addEventListener("unhandledrejection", e => {
 
   // v15.1's settings, matching what the service sends: no size rule, no price
   // cap, a 60-minute window and the shorter block list.
+  // gen is not a filter. The service stamps each check with one and only accepts
+  // a report carrying the current number, which is what stops a scan that replies
+  // late from ending the check that started after it was given up on.
   const CFG = {
+    gen: 7,
     minInches: 0, maxPrice: 0, maxAgeMinutes: 60, requireKnownAge: true,
     blockWords: "stand, stands, bracket, brackets, mount, mounts, mounted, " +
                 "firestick, firesticks, fire stick, fire tv stick, fire sticks",
@@ -98,6 +102,10 @@ window.addEventListener("unhandledrejection", e => {
   {
     const r = run([]);
     check("an empty page reports blank", r && r.blank === true, JSON.stringify(r));
+    // Every report, including this one, has to carry the generation back or the
+    // service cannot tell a live reply from a stale one and would drop them all
+    // - leaving the watchdog to end every check as if the page never answered.
+    check("a blank report carries its generation", r && r.gen === 7, JSON.stringify(r));
   }
 
   // -- the straightforward pass ----------------------------------------------
@@ -106,6 +114,7 @@ window.addEventListener("unhandledrejection", e => {
     check("a clean 50 inch TV passes", r.listings.length === 1, JSON.stringify(r));
     check("and carries its age", r.listings[0] && r.listings[0].ageMinutes === 4,
       JSON.stringify(r.listings[0]));
+    check("a report with listings carries its generation", r.gen === 7, JSON.stringify(r));
   }
 
   // -- what v15.1 rejects, and what it lets through ---------------------------

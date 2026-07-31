@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.app.NotificationCompat
+import com.tvmonitor.app.LoginActivity
 import com.tvmonitor.app.MainActivity
 import com.tvmonitor.app.R
 import com.tvmonitor.app.data.Listing
@@ -17,6 +18,7 @@ object NotificationHelper {
     const val CHANNEL_SERVICE = "monitor_service"
     const val CHANNEL_LISTINGS = "new_listings"
     const val SERVICE_ID = 1
+    const val SIGNED_OUT_ID = 2
     private var nextId = 100
 
     fun createChannels(context: Context) {
@@ -51,6 +53,38 @@ object NotificationHelper {
             .setOngoing(true)
             .setContentIntent(pi)
             .build()
+    }
+
+    /**
+     * The session has expired and monitoring has stopped finding anything.
+     *
+     * Deliberately on the listings channel rather than the quiet service one: a
+     * signed-out monitor finds nothing at all, so this has to interrupt in the
+     * same way a listing would. It is ongoing because it stays true until the
+     * trader signs in again, and swiping it away would leave a phone that looks
+     * like it is working and is not.
+     */
+    fun notifySignedOut(context: Context) {
+        val intent = Intent(context, LoginActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val pi = PendingIntent.getActivity(
+            context, 1, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        context.getSystemService(NotificationManager::class.java).notify(
+            SIGNED_OUT_ID,
+            NotificationCompat.Builder(context, CHANNEL_LISTINGS)
+                .setSmallIcon(R.drawable.ic_tv)
+                .setContentTitle("Signed out of Facebook")
+                .setContentText("Monitoring is paused. Tap to sign in again.")
+                .setOngoing(true)
+                .setContentIntent(pi)
+                .build()
+        )
+    }
+
+    fun clearSignedOut(context: Context) {
+        context.getSystemService(NotificationManager::class.java).cancel(SIGNED_OUT_ID)
     }
 
     fun notifyNewListings(context: Context, listings: List<Listing>) {
