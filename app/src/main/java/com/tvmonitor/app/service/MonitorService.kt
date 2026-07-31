@@ -89,6 +89,7 @@ class MonitorService : Service() {
     private var checkCount = 0
     private var blankStreak = 0
     private var urlIndex = 0
+    private var rendererDeaths = 0
 
     private val checkRunnable = object : Runnable {
         override fun run() { performCheck() }
@@ -189,6 +190,38 @@ class MonitorService : Service() {
                     override fun shouldOverrideUrlLoading(
                         view: WebView, request: WebResourceRequest
                     ): Boolean = false
+
+                    /**
+                     * The renderer died. Returning true keeps this app alive.
+                     *
+                     * This is the whole bug. A WebView runs the page in a separate
+                     * renderer process, and when that process is killed - which
+                     * Android does readily to a background app holding a page as
+                     * heavy as Facebook - the default behaviour is to kill the app
+                     * that owned it. Android then reports it as "The installed
+                     * version of WebView caused TV Monitor to crash" and offers to
+                     * uninstall WebView updates, which is a system-wide change that
+                     * fixes nothing, because WebView was never at fault.
+                     *
+                     * It is also why the crash recorder added earlier stayed empty:
+                     * no Java exception is ever thrown, so an uncaught-exception
+                     * handler has nothing to catch.
+                     */
+                    override fun onRenderProcessGone(
+                        view: WebView, detail: android.webkit.RenderProcessGoneDetail
+                    ): Boolean {
+                        rendererDeaths++
+                        // The dead WebView can never be reused; it must be detached
+                        // and destroyed before a replacement is built.
+                        handler.post {
+                            try { view.destroy() } catch (e: Exception) { }
+                            if (webView === view) webView = null
+                            initWebView()
+                            isChecking = false
+                            handler.postDelayed(checkRunnable, CHECK_INTERVAL)
+                        }
+                        return true
+                    }
                 }
             }
         }

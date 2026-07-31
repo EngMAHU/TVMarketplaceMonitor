@@ -39,6 +39,24 @@ class LoginActivity : AppCompatActivity() {
                     goToMain()
                 }
             }
+
+            /**
+             * Keeps the app alive when the renderer process is killed.
+             *
+             * Without this override, Android kills the whole app when the process
+             * running the page dies - and then blames WebView for it, offering to
+             * uninstall WebView updates system-wide. The Facebook login page is
+             * heavy enough for this to happen on a phone under memory pressure,
+             * which is exactly when it was seen: right after signing in.
+             */
+            override fun onRenderProcessGone(
+                view: WebView, detail: android.webkit.RenderProcessGoneDetail
+            ): Boolean {
+                try { view.destroy() } catch (e: Exception) { }
+                // Signing in again is a far smaller cost than the app closing.
+                recreate()
+                return true
+            }
         }
 
         webView.loadUrl("https://www.facebook.com/login")
