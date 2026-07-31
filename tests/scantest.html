@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>scan test</title></head>
+<body><pre id="out">running...</pre>
+<script>
+// Runs the real filters.js and scan.js against a synthetic Marketplace page.
+//
+// None of the Kotlin can be tested from a Windows machine with no JDK and no
+// Android SDK, but almost none of the judgement lives there: what counts as a
+// television, what a bundle is, what is too small, too dear or too far are all
+// decided in JavaScript. That is the part worth testing, and it is the part that
+// took a day of real listings to get right on the desktop.
+// A harness that dies silently is worse than no harness: the first run of this
+// one printed "running..." forever and said nothing about why.
+window.addEventListener("error", e => {
+  document.getElementById("out").textContent = "HARNESS ERROR: " + e.message;
+  document.title = "FAIL";
+});
+window.addEventListener("unhandledrejection", e => {
+  document.getElementById("out").textContent =
+    "HARNESS REJECTED: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason);
+  document.title = "FAIL";
+});
+
+(async () => {
+  const results = [];
+  const check = (name, pass, detail) => results.push({ name, pass: !!pass, detail: detail || "" });
+
+  // -- a card shaped the way Facebook renders one ----------------------------
+  function card(id, price, title, place) {
+    const a = document.createElement("a");
+    a.setAttribute("href", "/marketplace/item/" + id + "/");
+    for (const t of ["Just listed", price, title, place]) {
+      const s = document.createElement("span");
+      s.textContent = t;
+      a.appendChild(s);
+    }
+    return a;
+  }
+
+  function page(cards) {
+    const host = document.getElementById("page");
+    host.innerHTML = "";
+    for (const c of cards) host.appendChild(c);
+  }
+
+  // The bridge scan.js reports through.
+  let captured = null;
+  window.Android = { onListingsFound: j => { captured = JSON.parse(j); } };
+
+  const filters = await (await fetch("../app/src/main/assets/filters.js?n=" + Date.now())).text();
+  const scan    = await (await fetch("../app/src/main/assets/scan.js?n=" + Date.now())).text();
+
+  // Injected as a script element, not run through new Function.
+  //
+  // WebView.evaluateJavascript runs at global scope, so the const and function
+  // declarations in filters.js become visible to scan.js. new Function wraps them
+  // in a private scope instead, and scan.js then fails with "splitTerms is not
+  // defined" - a failure that exists only in the harness and would have sent
+  // someone hunting through working code.
+  function runGlobal(src) {
+    const el = document.createElement("script");
+    el.textContent = src;
+    document.head.appendChild(el);
+  }
+
+  let loadErr = "";
+  try { runGlobal(filters); } catch (e) { loadErr = "filters.js: " + e.message; }
+  check("filters.js loads", !loadErr, loadErr);
+  check("classify is available", typeof classify === "function");
+  // v15.1 has no size rule, so this function is absent by design. scan.js checks
+  // for it before calling, which is what stops the whole scan being thrown away.
+  check("v15.1 has no size rule, as expected", typeof statedInches === "undefined",
+    "statedInches is " + typeof statedInches);
+  check("isTooFar is available", typeof isTooFar === "function");
+
+  // v15.1's settings, matching what the service sends: no size rule, no price
+  // cap, a 60-minute window and the shorter block list.
+  const CFG = {
+    minInches: 0, maxPrice: 0, maxAgeMinutes: 60, requireKnownAge: true,
+    blockWords: "stand, stands, bracket, brackets, mount, mounts, mounted, " +
+                "firestick, firesticks, fire stick, fire tv stick, fire sticks",
+    excludeExtra: ""
+  };
+
+  function run(cards, pairs) {
+    captured = null;
+    page(cards);
+    window.__tvPairs__ = pairs || [];
+    // Same substitution, and the same global evaluation, the service performs.
+    runGlobal(scan.replace("__CONFIG__", JSON.stringify(CFG)));
+    return captured;
+  }
+
+  const now = Date.now();
+  const fresh = id => [{ id: String(id), time: now - 4 * 60000, dist: 10 }];
+
+  // -- a blank page must be reported as blank, not as "nothing worth alerting"
+  {
+    const r = run([]);
+    check("an empty page reports blank", r && r.blank === true, JSON.stringify(r));
+  }
+
+  // -- the straightforward pass ----------------------------------------------
+  {
+    const r = run([card(1, "£150", 'Samsung 50" Smart TV', "Liverpool")], fresh(1));
+    check("a clean 50 inch TV passes", r.listings.length === 1, JSON.stringify(r));
+    check("and carries its age", r.listings[0] && r.listings[0].ageMinutes === 4,
+      JSON.stringify(r.listings[0]));
+  }
+
+  // -- what v15.1 rejects, and what it lets through ---------------------------
+  //
+  // The second half of this is as important as the first. v15.1 was chosen
+  // deliberately, and these are the things it does NOT filter - they are recorded
+  // here as expectations rather than left to be discovered in a notification.
+  {
+    const r = run([
+      card(10, "£150", 'Samsung 50" Smart TV with stand', "Liverpool"),
+      card(11, "£120", 'LG 55" TV + Firestick', "Liverpool"),
+      card(17, "£90",  "TV Wall Mounting Handyman", "Liverpool"),
+      card(18, "£60",  "Oak TV media cabinet unit", "Liverpool"),
+      card(16, "£100", 'Samsung 50" Smart TV', "Huddersfield")
+    ], [10,11,16,17,18].flatMap(i => fresh(i)));
+
+    check("the reject page produced stats, not an error", !!r.stats,
+      r.error || JSON.stringify(r));
+    const st = r.stats || {};
+    check("bundles, services and furniture are all rejected", r.listings.length === 0,
+      JSON.stringify(r.listings.map(x => x.title)));
+    check("Huddersfield was called too far", st.tooFar === 1, JSON.stringify(st));
+  }
+
+  // -- v15.1's known gaps, asserted so they cannot be a surprise -------------
+  {
+    const r = run([
+      card(12, "£89",  'Samsung Odyssey S32DG502EU 32" LED QHD MONITOR', "Liverpool"),
+      card(13, "£35",  'Television. Toshiba 50". faulty.', "Liverpool"),
+      card(14, "£30",  'Bush 32" Smart LED TV', "Liverpool"),
+      card(15, "£400", 'Sony 55" 4K Smart TV', "Liverpool")
+    ], [12,13,14,15].flatMap(i => fresh(i)));
+
+    check("v15.1 gaps produced stats, not an error", !!r.stats, r.error || JSON.stringify(r));
+    const titles = (r.listings || []).map(x => x.title).join(" | ");
+    check("v15.1 lets a computer monitor through", /MONITOR/.test(titles), titles);
+    check("v15.1 lets a faulty set through", /faulty/.test(titles), titles);
+    check("v15.1 lets a 32 inch through (no size rule)", /Bush 32/.test(titles), titles);
+    check("v15.1 lets a £400 set through (no price cap)", /Sony 55/.test(titles), titles);
+  }
+
+  // -- negation, which is the whole reason "no stand" must not be a bundle ---
+  {
+    const r = run([card(20, "£180", 'LG 55" Smart TV, no stand, not broken', "Liverpool")], fresh(20));
+    check('"no stand, not broken" still passes', r.listings.length === 1,
+      JSON.stringify(r.stats));
+  }
+
+  // -- age ------------------------------------------------------------------
+  {
+    const r = run([card(30, "£150", 'Sony 50" Smart TV', "Liverpool")],
+                  [{ id: "30", time: now - 90 * 60000, dist: 10 }]);
+    check("a 90-minute-old listing is rejected", (r.listings || []).length === 0,
+      r.error || JSON.stringify(r.stats));
+  }
+  {
+    // Right on v15.1's wider window: 50 minutes would have been rejected by the
+    // later 45-minute setting and is accepted here.
+    const r = run([card(33, "£150", 'Sony 50" Smart TV', "Liverpool")],
+                  [{ id: "33", time: now - 50 * 60000, dist: 10 }]);
+    check("50 minutes passes on v15.1's 60-minute window",
+      (r.listings || []).length === 1, r.error || JSON.stringify(r.stats));
+  }
+  {
+    // No timestamp at all: held, and counted. v15.1 holds these rather than
+    // announcing an age it does not know.
+    const r = run([card(31, "£150", 'Sony 50" Smart TV', "Liverpool")], []);
+    check("an undated listing is held", (r.listings || []).length === 0,
+      r.error || JSON.stringify(r.stats));
+    check("and counted as undated", r.stats && r.stats.noDate === 1,
+      r.error || JSON.stringify(r.stats));
+  }
+
+  // -- a title with no stated size must not be read as small ----------------
+  {
+    const r = run([card(40, "£150", "Smart tv", "Liverpool")], fresh(40));
+    check("no stated size still passes", (r.listings || []).length === 1,
+      r.error || JSON.stringify(r.stats));
+  }
+
+  const passed = results.filter(r => r.pass).length;
+  document.getElementById("out").textContent =
+    "ANDROID SCAN: " + passed + "/" + results.length + " passed\n\n" +
+    results.map(r => (r.pass ? "  ok   " : "  FAIL ") + r.name +
+                     (r.pass ? "" : "   [" + r.detail + "]")).join("\n");
+  document.title = passed === results.length ? "PASS" : "FAIL";
+})();
+</script>
+<div id="page"></div>
+</body></html>

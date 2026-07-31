@@ -13,7 +13,6 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.data.Listing
@@ -23,7 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -31,11 +30,41 @@ import java.util.Locale
 class MonitorService : Service() {
 
     companion object {
-        private const val CHECK_INTERVAL = 60_000L
+        // 2.5 minutes between loads, alternating the two sources - which is
+        // v15.1's own rate: it walked two sources every five minutes, so each was
+        // read every five minutes and the pair cost about 24 page loads an hour.
+        //
+        // Not raised, for a reason worth stating plainly: the desktop build ran at
+        // 120 loads an hour and Facebook returned "You're Temporarily Blocked. It
+        // looks like you were misusing this feature by going too fast." This phone
+        // is the only channel the trader has left that still works, so the cost of
+        // losing it is everything.
+        private const val CHECK_INTERVAL = 150_000L
+
+        // Facebook renders Marketplace results client-side; the HTML shell arrives
+        // with nothing in it. Ten seconds is what the desktop scanner needed.
         private const val RENDER_WAIT = 10_000L
-        private const val MARKETPLACE_URL =
-            "https://www.facebook.com/marketplace/liverpool/search" +
-            "?query=tv&sortBy=creation_time_descend&radius=97&exact=false"
+
+        // v15.1's two sources, in v15.1's shape, at the trader's request.
+        //
+        // Both are category feeds. Worth recording what that costs, because it is
+        // measurable and was measured: category pages carry no sort control and
+        // ignore sortBy, so the feed is unordered, and across 358 alerts on the
+        // desktop the youngest listing a category feed ever produced was seven
+        // minutes old with a median of thirteen. The trader's own manual SEARCH
+        // returns listings two to three minutes old. Listings sell in about ten.
+        //
+        // The parameters are kept exactly as v15.1 built them, sortBy included,
+        // even though a category page ignores it - this is a faithful port, not
+        // an improved one.
+        private val URLS = listOf(
+            "https://www.facebook.com/marketplace/liverpool/tvs/" +
+            "?sortBy=creation_time_descend&daysSinceListed=1&radius=113&exact=false",
+
+            // Centred on Manchester with a 30 km radius, as v15.1 had it.
+            "https://www.facebook.com/marketplace/manchester/tvs/" +
+            "?sortBy=creation_time_descend&daysSinceListed=1&radius=30&exact=false"
+        )
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
@@ -58,21 +87,30 @@ class MonitorService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var isChecking = false
     private var checkCount = 0
+    private var blankStreak = 0
+    private var urlIndex = 0
 
     private val checkRunnable = object : Runnable {
-        override fun run() {
-            performCheck()
-        }
+        override fun run() { performCheck() }
     }
+
+    // Loaded once. filters.js is copied verbatim from the desktop extension, so
+    // the two cannot drift apart on what counts as a television.
+    private val filtersJs by lazy { readAsset("filters.js") }
+    private val scanJs by lazy { readAsset("scan.js") }
+    private val captureJs by lazy { readAsset("capture.js") }
+
+    private fun readAsset(name: String): String =
+        assets.open(name).bufferedReader().use { it.readText() }
 
     override fun onCreate() {
         super.onCreate()
         isRunning = true
         db = AppDatabase.getInstance(this)
-
-        val notification = NotificationHelper.serviceNotification(this, 0, "Starting...")
-        startForeground(NotificationHelper.SERVICE_ID, notification)
-
+        startForeground(
+            NotificationHelper.SERVICE_ID,
+            NotificationHelper.serviceNotification(this, 0, "Starting...")
+        )
         acquireWakeLock()
         initWebView()
         handler.post(checkRunnable)
@@ -81,9 +119,8 @@ class MonitorService : Service() {
     @SuppressLint("WakelockTimeout")
     private fun acquireWakeLock() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK, "tvmonitor::monitor"
-        ).apply { acquire() }
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "tvmonitor::monitor")
+            .apply { acquire() }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -105,9 +142,23 @@ class MonitorService : Service() {
                 addJavascriptInterface(ScraperInterface(), "Android")
 
                 webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(
+                        view: WebView, url: String?, favicon: android.graphics.Bitmap?
+                    ) {
+                        // The capture has to be installed before Facebook's first
+                        // GraphQL call, or the payload holding the newest listings
+                        // has come and gone before anything is watching - which is
+                        // exactly how an earlier desktop build ended up with no
+                        // timestamps at all.
+                        view.evaluateJavascript(captureJs, null)
+                    }
+
                     override fun onPageFinished(view: WebView, url: String) {
                         handler.postDelayed({
-                            view.evaluateJavascript(extractionScript(), null)
+                            view.evaluateJavascript(filtersJs, null)
+                            view.evaluateJavascript(
+                                scanJs.replace("__CONFIG__", configJson()), null
+                            )
                         }, RENDER_WAIT)
                     }
 
@@ -119,26 +170,41 @@ class MonitorService : Service() {
         }
     }
 
+    // v15.1's settings exactly, at the trader's request. Deliberately NOT the
+    // later ones: no minimum screen size, no price cap, a 60-minute window rather
+    // than 45, and the shorter block list from before "faulty", "broken",
+    // "cracked", "for parts" were added. Undated listings are held rather than
+    // announced, which v15.1 also did.
+    private fun configJson(): String = JSONObject().apply {
+        put("minInches", 0)
+        put("maxPrice", 0)
+        put("maxAgeMinutes", 60)
+        put("requireKnownAge", true)
+        put(
+            "blockWords",
+            "stand, stands, bracket, brackets, mount, mounts, mounted, " +
+            "firestick, firesticks, fire stick, fire tv stick, fire sticks"
+        )
+        put("excludeExtra", "")
+    }.toString()
+
     private fun performCheck() {
         if (isChecking) {
             handler.postDelayed(checkRunnable, CHECK_INTERVAL)
             return
         }
         isChecking = true
-        handler.post {
-            webView?.loadUrl(MARKETPLACE_URL)
-        }
+        val url = URLS[urlIndex % URLS.size]
+        urlIndex++
+        handler.post { webView?.loadUrl(url) }
     }
 
     inner class ScraperInterface {
         @JavascriptInterface
         fun onListingsFound(json: String) {
             scope.launch {
-                try {
-                    processResults(json)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                } finally {
+                try { processResults(json) } catch (e: Exception) { e.printStackTrace() }
+                finally {
                     isChecking = false
                     checkCount++
                     updateServiceNotification()
@@ -149,128 +215,71 @@ class MonitorService : Service() {
     }
 
     private suspend fun processResults(json: String) {
-        if (json == "[]" || json.isBlank()) return
+        if (json.isBlank()) return
+        val root = try { JSONObject(json) } catch (e: Exception) { return }
 
-        val listings = parseListings(json)
+        // A fully rendered page with no results is what rate limiting looks like -
+        // there is no error, just an empty grid. Saying so on the ongoing
+        // notification is the only warning the trader gets that the phone is going
+        // the way the laptop did.
+        if (root.optBoolean("blank", false)) {
+            blankStreak++
+            return
+        }
+        blankStreak = 0
+
+        val array = root.optJSONArray("listings") ?: return
+        if (array.length() == 0) return
+
+        val listings = ArrayList<Listing>()
+        for (i in 0 until array.length()) {
+            val o = array.optJSONObject(i) ?: continue
+            val id = o.optString("id", "")
+            if (id.isBlank()) continue
+            listings.add(
+                Listing(
+                    id = id,
+                    title = o.optString("title", "TV Listing"),
+                    price = o.optString("price", ""),
+                    imageUrl = "",
+                    location = o.optString("location", ""),
+                    url = o.optString(
+                        "url", "https://www.facebook.com/marketplace/item/$id"
+                    )
+                )
+            )
+        }
         if (listings.isEmpty()) return
 
         val existingIds = db.listingDao().getAllIds().toSet()
-        val newListings = listings.filter { it.id !in existingIds }
-
-        if (newListings.isNotEmpty()) {
-            db.listingDao().insertAll(newListings)
-            NotificationHelper.notifyNewListings(this, newListings)
+        val fresh = listings.filter { it.id !in existingIds }
+        if (fresh.isNotEmpty()) {
+            db.listingDao().insertAll(fresh)
+            NotificationHelper.notifyNewListings(this, fresh)
         }
 
         val weekAgo = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
         db.listingDao().deleteOlderThan(weekAgo)
     }
 
-    private fun parseListings(json: String): List<Listing> {
-        val result = mutableListOf<Listing>()
-        try {
-            val array = JSONArray(json)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                val id = obj.optString("id", "")
-                if (id.isBlank()) continue
-                result.add(
-                    Listing(
-                        id = id,
-                        title = obj.optString("title", "TV Listing"),
-                        price = obj.optString("price", ""),
-                        imageUrl = obj.optString("imageUrl", ""),
-                        location = obj.optString("location", "Liverpool area"),
-                        url = obj.optString("url",
-                            "https://www.facebook.com/marketplace/item/$id")
-                    )
-                )
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return result
-    }
-
     private suspend fun updateServiceNotification() {
         val count = db.listingDao().count()
         val time = SimpleDateFormat("HH:mm:ss", Locale.UK).format(Date())
-        val notification = NotificationHelper.serviceNotification(this, count, time)
+        val status = if (blankStreak >= 3)
+            "$time - Facebook returning nothing ($blankStreak)" else time
         val nm = getSystemService(android.app.NotificationManager::class.java)
-        nm.notify(NotificationHelper.SERVICE_ID, notification)
+        nm.notify(
+            NotificationHelper.SERVICE_ID,
+            NotificationHelper.serviceNotification(this, count, status)
+        )
     }
-
-    private fun extractionScript(): String = """
-        (function() {
-            try {
-                var listings = [];
-                var seen = {};
-                var links = document.querySelectorAll('a[href*="/marketplace/item/"]');
-
-                for (var i = 0; i < links.length; i++) {
-                    var link = links[i];
-                    var href = link.getAttribute('href') || '';
-                    var match = href.match(/\/marketplace\/item\/(\d+)/);
-                    if (!match || seen[match[1]]) continue;
-                    seen[match[1]] = true;
-
-                    var imgs = link.querySelectorAll('img');
-                    var imageUrl = '';
-                    for (var k = 0; k < imgs.length; k++) {
-                        var src = imgs[k].getAttribute('src') || '';
-                        if (src && src.startsWith('http') && src.indexOf('emoji') === -1) {
-                            imageUrl = src;
-                            break;
-                        }
-                    }
-
-                    var spans = link.querySelectorAll('span');
-                    var texts = [];
-                    for (var m = 0; m < spans.length; m++) {
-                        var t = (spans[m].innerText || spans[m].textContent || '').trim();
-                        if (t.length > 0 && t.length < 200 && texts.indexOf(t) === -1) {
-                            texts.push(t);
-                        }
-                    }
-
-                    var price = '', title = '', location = '';
-                    for (var n = 0; n < texts.length; n++) {
-                        var txt = texts[n];
-                        if (!price && (txt.match(/^[£$€\d]/) || txt.toLowerCase() === 'free')) {
-                            price = txt;
-                        } else if (!title && txt.length > 2 && !txt.match(/^\d+\s*(miles?|km)/i)) {
-                            title = txt;
-                        } else if (title && !location && txt.length > 2) {
-                            location = txt;
-                        }
-                    }
-
-                    listings.push({
-                        id: match[1],
-                        title: title || 'TV Listing',
-                        price: price || 'See listing',
-                        imageUrl: imageUrl,
-                        location: location || 'Liverpool area',
-                        url: 'https://www.facebook.com/marketplace/item/' + match[1]
-                    });
-                }
-
-                Android.onListingsFound(JSON.stringify(listings));
-            } catch(e) {
-                Android.onListingsFound('[]');
-            }
-        })();
-    """.trimIndent()
 
     override fun onDestroy() {
         isRunning = false
         handler.removeCallbacksAndMessages(null)
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
-        handler.post {
-            webView?.destroy()
-            webView = null
-        }
+        handler.post { webView?.destroy(); webView = null }
         super.onDestroy()
     }
 
