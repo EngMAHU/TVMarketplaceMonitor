@@ -18,6 +18,7 @@ import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.data.Listing
 import com.tvmonitor.app.util.FacebookSession
 import com.tvmonitor.app.util.NotificationHelper
+import com.tvmonitor.app.util.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -313,26 +314,28 @@ class MonitorService : Service() {
         }
     }
 
-    // v15.1's settings exactly, at the trader's request. Deliberately NOT the
-    // later ones: no minimum screen size, no price cap, a 60-minute window rather
-    // than 45, and the shorter block list from before "faulty", "broken",
-    // "cracked", "for parts" were added. Undated listings are held rather than
-    // announced, which v15.1 also did.
-    private fun configJson(generation: Int): String = JSONObject().apply {
-        // Carried through the scan and handed back in its report, so a reply from
-        // a check that was already given up on can be told apart from a live one.
-        put("gen", generation)
-        put("minInches", 0)
-        put("maxPrice", 0)
-        put("maxAgeMinutes", 60)
-        put("requireKnownAge", true)
-        put(
-            "blockWords",
-            "stand, stands, bracket, brackets, mount, mounts, mounted, " +
-            "firestick, firesticks, fire stick, fire tv stick, fire sticks"
-        )
-        put("excludeExtra", "")
-    }.toString()
+    /**
+     * The trader's filter settings, as the scan expects them.
+     *
+     * Read fresh on every check rather than cached at startup, which is what
+     * lets the filters screen take effect without stopping the monitor. The
+     * defaults behind it are still v15.1's exactly, so a trader who changes
+     * nothing gets the behaviour that has been running all along.
+     */
+    private fun configJson(generation: Int): String {
+        val f = Settings.load(this)
+        return JSONObject().apply {
+            // Carried through the scan and handed back in its report, so a reply
+            // from a check already given up on can be told from a live one.
+            put("gen", generation)
+            put("minInches", f.minInches)
+            put("maxPrice", f.maxPrice)
+            put("maxAgeMinutes", f.maxAgeMinutes)
+            put("requireKnownAge", f.requireKnownAge)
+            put("blockWords", f.blockWords)
+            put("excludeExtra", f.excludeExtra)
+        }.toString()
+    }
 
     private fun performCheck() {
         // The session can expire at any time and nothing announces it. A

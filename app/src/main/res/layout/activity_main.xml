@@ -39,10 +39,22 @@
         </LinearLayout>
 
         <Button
+            android:id="@+id/filtersBtn"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
+            android:text="Filters"
+            android:textColor="@android:color/white" />
+
+        <Button
             android:id="@+id/logoutBtn"
             style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingHorizontal="8dp"
             android:text="Logout"
             android:textColor="@android:color/white" />
     </LinearLayout>

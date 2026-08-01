@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/primary"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Filters"
+            android:textColor="@android:color/white"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Changes apply on the next check. No restart needed."
+            android:textColor="#B3FFFFFF"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="16dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Age -->
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Alert on listings newer than (minutes)" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="TVs sell in about ten minutes. Above roughly 60 the good ones are usually gone." />
+
+            <EditText
+                android:id="@+id/maxAgeInput"
+                style="@style/FilterInput"
+                android:inputType="number" />
+
+            <!-- Undated -->
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/requireKnownAgeSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Hide listings with no date"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="Facebook does not date every listing. ON hides those - safer, but you will miss some. OFF alerts them with an unknown age." />
+
+            <!-- Size -->
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Smallest screen (inches)" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="0 = any size. Only applied when the seller states a size in the title; a listing that states none is never rejected as too small." />
+
+            <EditText
+                android:id="@+id/minInchesInput"
+                style="@style/FilterInput"
+                android:inputType="number" />
+
+            <!-- Price -->
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Most you will pay (£)" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="0 = no limit. Listings priced Free or with no price shown are never rejected on price." />
+
+            <EditText
+                android:id="@+id/maxPriceInput"
+                style="@style/FilterInput"
+                android:inputType="number" />
+
+            <!-- Block words -->
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Skip listings containing" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="Comma separated. Negations are understood: a TV described as &quot;no stand&quot; still gets through." />
+
+            <EditText
+                android:id="@+id/blockWordsInput"
+                style="@style/FilterInput"
+                android:inputType="textMultiLine"
+                android:minLines="3"
+                android:gravity="top" />
+
+            <!-- Extra -->
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Also skip (your own words)" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="Comma separated. Brands or sellers you never want to see." />
+
+            <EditText
+                android:id="@+id/excludeExtraInput"
+                style="@style/FilterInput"
+                android:inputType="textMultiLine"
+                android:minLines="2"
+                android:gravity="top" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:layout_marginTop="24dp"
+                android:text="Not adjustable here: how often it checks. It reads one feed every 2.5 minutes, which is the rate the desktop version was blocked for exceeding. This phone is the only channel still working." />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <Button
+            android:id="@+id/resetBtn"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:text="RESET" />
+
+        <Button
+            android:id="@+id/saveBtn"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_marginStart="12dp"
+            android:layout_weight="2"
+            android:backgroundTint="@color/start_green"
+            android:text="SAVE"
+            android:textColor="@android:color/white"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+</LinearLayout>

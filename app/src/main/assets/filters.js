@@ -136,3 +136,25 @@ function classify(title, blockWords, extraExcludes) {
   }
   return { ok: false, reason: "no-tv-keyword" };
 }
+
+// The screen size the seller stated, or null if they stated none.
+//
+// Added for the filters screen. v15.1 had no size rule at all, and scan.js
+// still checks that this exists before calling it - that guard is what kept a
+// missing function from throwing away the whole scan, and it stays.
+//
+// Two digits only, matching SIZE_RE above. A one-digit match would read the 4
+// in "4K" as a four-inch television, and a three-digit one is a model number or
+// a price far more often than a size.
+//
+// Returning null rather than 0 for "not stated" matters: scan.js only rejects a
+// listing when a size is both stated and too small, so a seller who omits the
+// size is never dropped for it. Most real listings do state it, and the ones
+// that do not are worth a look anyway.
+function statedInches(title) {
+  const t = normalise(title);
+  const m = t.match(/\b(\d{2})\s*(?:inch|inches|in)\b/) || t.match(/\b(\d{2})\s*"/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n >= 10 && n <= 99 ? n : null;
+}

@@ -67,9 +67,10 @@ window.addEventListener("unhandledrejection", e => {
   try { runGlobal(filters); } catch (e) { loadErr = "filters.js: " + e.message; }
   check("filters.js loads", !loadErr, loadErr);
   check("classify is available", typeof classify === "function");
-  // v15.1 has no size rule, so this function is absent by design. scan.js checks
-  // for it before calling, which is what stops the whole scan being thrown away.
-  check("v15.1 has no size rule, as expected", typeof statedInches === "undefined",
+  // A size rule exists now, because the filters screen exposes one. It stays
+  // optional: scan.js still checks the function is there before calling it, and
+  // still only rejects when a size is BOTH stated and too small.
+  check("statedInches is available", typeof statedInches === "function",
     "statedInches is " + typeof statedInches);
   check("isTooFar is available", typeof isTooFar === "function");
 
@@ -193,6 +194,68 @@ window.addEventListener("unhandledrejection", e => {
     const r = run([card(40, "£150", "Smart tv", "Liverpool")], fresh(40));
     check("no stated size still passes", (r.listings || []).length === 1,
       r.error || JSON.stringify(r.stats));
+  }
+
+  // -- the size reader behind the filters screen ----------------------------
+  {
+    const sizes = [
+      ['Bush 32" Smart LED TV', 32],
+      ["Samsung 55 inch 4K TV", 55],
+      ["LG 43in Smart TV", 43],
+      ["Sony 65 INCHES OLED", 65],
+      // No size stated: null, never 0, or the price filter's neighbour would
+      // reject every listing that omits one.
+      ["Smart tv, great condition", null],
+      // The 4 in 4K is not a four-inch television, and a model number is not a
+      // size. Both are why the match is two digits and no more.
+      ["Hisense 4K UHD Television", null],
+      ["Samsung UE508 Television", null]
+    ];
+    for (const [title, want] of sizes) {
+      check("size of " + JSON.stringify(title) + " is " + want,
+        statedInches(title) === want, "got " + statedInches(title));
+    }
+  }
+
+  // -- a size rule only rejects when a size is stated AND too small ---------
+  {
+    const saved = CFG.minInches;
+    CFG.minInches = 40;
+
+    const r = run([
+      card(50, "£30",  'Bush 32" Smart LED TV', "Liverpool"),
+      card(51, "£150", 'Sony 55" 4K Smart TV', "Liverpool"),
+      card(52, "£90",  'Smart tv, no size given', "Liverpool")
+    ], [50, 51, 52].flatMap(i => fresh(i)));
+
+    const titles = (r.listings || []).map(x => x.title).join(" | ");
+    check("32 inch is rejected when the floor is 40", !/Bush 32/.test(titles), titles);
+    check("55 inch still passes", /Sony 55/.test(titles), titles);
+    check("a listing stating no size is not rejected as small",
+      /no size given/.test(titles), titles);
+    check("and it is counted as too small, once", r.stats && r.stats.tooSmall === 1,
+      JSON.stringify(r.stats));
+
+    CFG.minInches = saved;
+  }
+
+  // -- a price cap, likewise, never rejects a listing with no price ---------
+  {
+    const saved = CFG.maxPrice;
+    CFG.maxPrice = 100;
+
+    const r = run([
+      card(60, "£400", 'Sony 55" 4K Smart TV', "Liverpool"),
+      card(61, "£80",  'LG 50" Smart TV', "Liverpool"),
+      card(62, "Free", 'Panasonic 42" TV', "Liverpool")
+    ], [60, 61, 62].flatMap(i => fresh(i)));
+
+    const titles = (r.listings || []).map(x => x.title).join(" | ");
+    check("£400 is rejected when the cap is £100", !/Sony 55/.test(titles), titles);
+    check("£80 passes the cap", /LG 50/.test(titles), titles);
+    check("a free listing is never too dear", /Panasonic/.test(titles), titles);
+
+    CFG.maxPrice = saved;
   }
 
   const passed = results.filter(r => r.pass).length;

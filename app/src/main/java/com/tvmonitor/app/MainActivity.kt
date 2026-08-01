@@ -28,6 +28,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var emptyText: TextView
     private lateinit var logoutBtn: Button
+    private lateinit var filtersBtn: Button
 
     private val notifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -41,6 +42,7 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         emptyText = findViewById(R.id.emptyText)
         logoutBtn = findViewById(R.id.logoutBtn)
+        filtersBtn = findViewById(R.id.filtersBtn)
         val recyclerView = findViewById<RecyclerView>(R.id.listingsRecycler)
         val swipeRefresh = findViewById<SwipeRefreshLayout>(R.id.swipeRefresh)
 
@@ -63,6 +65,9 @@ class MainActivity : AppCompatActivity() {
 
         toggleBtn.setOnClickListener { toggleMonitoring() }
         logoutBtn.setOnClickListener { logout() }
+        filtersBtn.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
 
         requestNotifPermission()
         showLastFailureIfAny()
