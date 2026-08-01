@@ -94,6 +94,24 @@
             android:text="One feed every 2.5 minutes"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/requireAgeSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:checked="true"
+            android:text="Only alert when the listing's age is known"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/requireAgeHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Turn off if listings are being found but held as undated"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
     </LinearLayout>
 
     <!-- Listings -->

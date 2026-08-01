@@ -86,12 +86,13 @@ window.addEventListener("unhandledrejection", e => {
     excludeExtra: ""
   };
 
-  function run(cards, pairs) {
+  function run(cards, pairs, overrides) {
     captured = null;
     page(cards);
     window.__tvPairs__ = pairs || [];
+    const cfg = Object.assign({}, CFG, overrides || {});
     // Same substitution, and the same global evaluation, the service performs.
-    runGlobal(scan.replace("__CONFIG__", JSON.stringify(CFG)));
+    runGlobal(scan.replace("__CONFIG__", JSON.stringify(cfg)));
     return captured;
   }
 
@@ -186,6 +187,35 @@ window.addEventListener("unhandledrejection", e => {
       r.error || JSON.stringify(r.stats));
     check("and counted as undated", r.stats && r.stats.noDate === 1,
       r.error || JSON.stringify(r.stats));
+  }
+  {
+    // The same page with the setting turned off. This is the escape hatch for
+    // the app's worst failure: if capture.js ever stops seeing creation_time,
+    // every listing is undated, every one is held, and the app goes silent while
+    // looking healthy. Turning this off has to actually let them through.
+    const r = run([card(32, "£150", 'Sony 50" Smart TV', "Liverpool")], [],
+                  { requireKnownAge: false });
+    check("an undated listing passes when the age rule is off",
+      (r.listings || []).length === 1, r.error || JSON.stringify(r.stats));
+    check("and is reported with an unknown age",
+      r.listings && r.listings[0] && r.listings[0].ageMinutes === null,
+      JSON.stringify(r.listings && r.listings[0]));
+  }
+
+  // -- a card the scan cannot read must be counted, not silently dropped -----
+  {
+    // A listing link holding no spans at all - what a Marketplace restyle would
+    // look like. Every card unreadable and every rejection counter at zero is
+    // the only signature that says "the page changed" rather than "the filters
+    // disagreed", and it is worth nothing if the cards are dropped uncounted.
+    const bare = document.createElement("a");
+    bare.setAttribute("href", "/marketplace/item/50/");
+    bare.textContent = 'Samsung 50" Smart TV';
+    const r = run([bare], fresh(50));
+    check("an unreadable card is counted, not dropped silently",
+      r.stats && r.stats.noTitle === 1, JSON.stringify(r.stats));
+    check("and nothing is alerted from it", (r.listings || []).length === 0,
+      JSON.stringify(r.listings));
   }
 
   // -- a title with no stated size must not be read as small ----------------

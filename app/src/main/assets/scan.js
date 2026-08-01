@@ -46,7 +46,8 @@
     var extra = splitTerms(CFG.excludeExtra || "");
     var seen = {};
     var kept = [];
-    var stats = { total: 0, notTv: 0, tooSmall: 0, tooDear: 0, tooFar: 0, tooOld: 0, noDate: 0 };
+    var stats = { total: 0, notTv: 0, tooSmall: 0, tooDear: 0, tooFar: 0, tooOld: 0,
+                  noDate: 0, noTitle: 0 };
 
     for (var i = 0; i < links.length; i++) {
       var link = links[i];
@@ -77,7 +78,13 @@
         else if (!title && txt.length > 2 && !/^\d+\s*(miles?|km)/i.test(txt)) title = txt;
         else if (title && !place && txt.length > 2) place = txt;
       }
-      if (!title) continue;
+      // Counted, not just skipped. The fields are recovered from the shape of
+      // the card's spans, so if Facebook restyles Marketplace this is where it
+      // breaks - and it breaks completely, with every card unreadable. Silently
+      // dropping them made that identical to a page of listings the filters
+      // happened to reject: a run of cards read with every rejection counter at
+      // zero says the page changed, and nothing else does.
+      if (!title) { stats.noTitle++; continue; }
 
       var price = 0;
       if (/free/i.test(priceText)) price = 0;

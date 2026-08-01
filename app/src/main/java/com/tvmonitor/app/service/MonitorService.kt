@@ -14,11 +14,14 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.data.Listing
 import com.tvmonitor.app.util.FacebookSession
 import com.tvmonitor.app.util.NotificationHelper
 import com.tvmonitor.app.util.ScanStatus
+import com.tvmonitor.app.util.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -146,6 +149,15 @@ class MonitorService : Service() {
     // source that has stopped producing can be told from a quiet market.
     @Volatile private var currentSource = ""
 
+    // Whether capture.js is guaranteed to run before the page's own scripts.
+    // False means this WebView cannot do that and the late fallback is in use,
+    // which is worth knowing when no listing is carrying a timestamp.
+    private var documentStartCapture = false
+
+    // The last scan's counts, so the ongoing notification can name the reason
+    // for a silence rather than just showing the time it last stayed silent.
+    @Volatile private var lastReport: ScanStatus.Report? = null
+
     // Which check is in flight. Every check gets a new number, and only a report
     // carrying the current one is allowed to end it - see finishCheck.
     private var checkGeneration = 0
@@ -187,6 +199,45 @@ class MonitorService : Service() {
         handler.post(checkRunnable)
     }
 
+    /**
+     * Registers capture.js to run before any of the page's own scripts.
+     *
+     * This is the difference between the app alerting and the app being silent,
+     * and it is worth being exact about why.
+     *
+     * capture.js has to replace window.fetch before Facebook makes its first
+     * GraphQL call. Miss it and the response holding the newest listings has
+     * come and gone unwatched, so no listing gets a creation_time. Every listing
+     * then has an unknown age, and with requireKnownAge set - which it is,
+     * deliberately - scan.js holds every single one. The scan works, the filters
+     * work, the page reads fine, and nothing is ever announced.
+     *
+     * It used to be injected from onPageStarted, which does not guarantee that.
+     * onPageStarted fires as the main frame begins loading, and a script
+     * evaluated there is routinely lost when the new document commits, or lands
+     * after the page's own scripts have already run. addDocumentStartJavaScript
+     * is the API that exists for precisely this and gives the guarantee outright:
+     * it runs on every navigation, before any page script, in every matching
+     * frame.
+     *
+     * Not every WebView supports it, so the flag records whether the guarantee is
+     * actually in place and onPageStarted stays as a fallback for the rest.
+     */
+    private fun installCapture(view: WebView) {
+        documentStartCapture = false
+        if (captureJs.isBlank()) return
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(
+                    view, captureJs, setOf("https://www.facebook.com")
+                )
+                documentStartCapture = true
+            }
+        } catch (e: Exception) {
+            // Left false, so onPageStarted injects the old way instead.
+        }
+    }
+
     @SuppressLint("WakelockTimeout")
     private fun acquireWakeLock() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -211,17 +262,23 @@ class MonitorService : Service() {
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
                 addJavascriptInterface(ScraperInterface(), "Android")
+                installCapture(this)
 
                 webViewClient = object : WebViewClient() {
                     override fun onPageStarted(
                         view: WebView, url: String?, favicon: android.graphics.Bitmap?
                     ) {
-                        // The capture has to be installed before Facebook's first
-                        // GraphQL call, or the payload holding the newest listings
-                        // has come and gone before anything is watching - which is
-                        // exactly how an earlier desktop build ended up with no
-                        // timestamps at all.
-                        try { view.evaluateJavascript(captureJs, null) } catch (e: Exception) { }
+                        // Fallback only. installCapture registers the real thing;
+                        // this covers the case where the device's WebView is too
+                        // old to support document-start scripts, where injecting
+                        // late is better than not at all. capture.js guards itself
+                        // with __tvcap__, so running twice costs nothing.
+                        if (!documentStartCapture) {
+                            try {
+                                view.evaluateJavascript(captureJs, null)
+                            } catch (e: Exception) {
+                            }
+                        }
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
@@ -297,7 +354,9 @@ class MonitorService : Service() {
         put("minInches", 0)
         put("maxPrice", 0)
         put("maxAgeMinutes", 60)
-        put("requireKnownAge", true)
+        // Read fresh each scan, so switching it off in the app takes effect on
+        // the next check rather than needing the service restarted.
+        put("requireKnownAge", Settings.requireKnownAge(this))
         put(
             "blockWords",
             "stand, stands, bracket, brackets, mount, mounts, mounted, " +
@@ -453,8 +512,7 @@ class MonitorService : Service() {
      */
     private fun reportScan(root: JSONObject, kept: Int, blank: Boolean) {
         val s = root.optJSONObject("stats")
-        ScanStatus.post(
-            ScanStatus.Report(
+        val report = ScanStatus.Report(
                 at = System.currentTimeMillis(),
                 source = currentSource,
                 blank = blank,
@@ -466,9 +524,11 @@ class MonitorService : Service() {
                 noDate = s?.optInt("noDate", 0) ?: 0,
                 tooSmall = s?.optInt("tooSmall", 0) ?: 0,
                 tooDear = s?.optInt("tooDear", 0) ?: 0,
+                noTitle = s?.optInt("noTitle", 0) ?: 0,
                 error = root.optString("error", "").ifBlank { null }
-            )
         )
+        lastReport = report
+        ScanStatus.post(report)
     }
 
     private suspend fun updateServiceNotification() {
@@ -478,11 +538,27 @@ class MonitorService : Service() {
         // The ongoing notification is the only thing the trader sees while the
         // phone sits in a pocket, so every way this can be failing has to be able
         // to reach it. Ordered worst first.
+        val r = lastReport
         val state = when {
             assetError != null -> "not working: $assetError"
             signedOut -> "signed out - sign in to resume"
             stalls > 0 -> "$time - no reply from page ($stalls)"
             blankStreak >= 3 -> "$time - Facebook returning nothing ($blankStreak)"
+
+            // The silent failure, said out loud. Cards were read and every one
+            // was held for having no date, which means no alert will ever fire
+            // no matter how many televisions are listed. Without this line it
+            // looks exactly like a quiet market, and it is the state the app was
+            // most likely to sit in for a whole day without anyone knowing.
+            r != null && r.kept == 0 && r.noDate > 0 && r.noDate >= r.total - r.notTv ->
+                "$time - ${r.noDate} found but undated, all held"
+
+            // Cards on the page and not one of them readable: Facebook changed
+            // the shape of a listing card and the scan cannot see titles at all.
+            r != null && r.kept == 0 && r.noTitle > 0 && r.noTitle >= r.total ->
+                "$time - page changed, ${r.noTitle} cards unreadable"
+
+            r != null && r.error != null -> "$time - scan failed: ${r.error}"
             else -> time
         }
         // Renderer deaths are survived rather than fatal now, but a phone killing

@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -20,6 +21,7 @@ import com.tvmonitor.app.adapter.ListingAdapter
 import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.service.MonitorService
 import com.tvmonitor.app.util.ScanStatus
+import com.tvmonitor.app.util.Settings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,6 +52,14 @@ class MainActivity : AppCompatActivity() {
         scanSourceText = findViewById(R.id.scanSourceText)
         scanCountsText = findViewById(R.id.scanCountsText)
         scanRejectsText = findViewById(R.id.scanRejectsText)
+
+        val requireAgeSwitch = findViewById<SwitchCompat>(R.id.requireAgeSwitch)
+        requireAgeSwitch.isChecked = Settings.requireKnownAge(this)
+        requireAgeSwitch.setOnCheckedChangeListener { _, checked ->
+            // The service reads this fresh on every scan, so there is nothing to
+            // restart - the next check two and a half minutes from now uses it.
+            Settings.setRequireKnownAge(this, checked)
+        }
         val recyclerView = findViewById<RecyclerView>(R.id.listingsRecycler)
         val swipeRefresh = findViewById<SwipeRefreshLayout>(R.id.swipeRefresh)
 

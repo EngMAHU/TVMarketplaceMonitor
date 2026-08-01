@@ -35,6 +35,9 @@ object ScanStatus {
         val noDate: Int,
         val tooSmall: Int,
         val tooDear: Int,
+        // Cards whose title could not be read at all. The distinctive one: it
+        // means the page's shape changed, not that the filters disagreed.
+        val noTitle: Int,
         // scan.js catches its own exceptions and reports the message rather than
         // dying silently. Nothing read it either, so a scan throwing on every
         // single page looked exactly like Facebook having nothing to sell.
@@ -43,6 +46,7 @@ object ScanStatus {
         /** The rejections, worst offender first, and only the ones that fired. */
         fun breakdown(): String {
             val parts = listOfNotNull(
+                if (noTitle > 0) "$noTitle unreadable" else null,
                 if (notTv > 0) "$notTv not TVs" else null,
                 if (tooFar > 0) "$tooFar too far" else null,
                 if (tooOld > 0) "$tooOld too old" else null,
