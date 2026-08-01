@@ -77,18 +77,26 @@
             android:textSize="14sp"
             android:textStyle="bold" />
 
+        <!--
+            These three lines described a monitor that does not exist: one
+            Liverpool feed, sorted newest first, read every minute. It is two
+            feeds read alternately every 2.5 minutes, and a category feed
+            carries no sort control at all - it ignores sortBy and returns an
+            unordered page. Stating otherwise on the main screen invites the
+            trader to trust an ordering that is not there.
+        -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Location: Liverpool, 60 miles radius"
+            android:text="Liverpool (70mi) and Manchester (30km), alternating"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Sort: Newest first | Check: Every 1 minute"
+            android:text="One feed every 2.5 min | Alerts on TVs listed in the last hour"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
     </LinearLayout>
