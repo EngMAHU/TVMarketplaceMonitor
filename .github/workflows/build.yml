@@ -13,6 +13,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # Needed to publish the release below.
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +49,34 @@ jobs:
         with:
           name: TVMonitor-APK
           path: app/build/outputs/apk/debug/TVMonitor.apk
+
+      # The artifact above is only reachable by signing in to GitHub and
+      # downloading a zip, which a phone cannot install without unpacking it
+      # first. That is the step the trader kept getting stuck on, and it is
+      # between every fix and the phone it is meant to fix.
+      #
+      # A release asset is a plain file on a public repository: one tap in the
+      # phone's browser downloads TVMonitor.apk itself, ready to install. The
+      # tag moves with each build, so /releases/latest/download/TVMonitor.apk
+      # is a permanent address for the newest one and never has to be looked up
+      # again.
+      - name: Publish the APK as a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > notes.md <<'NOTES'
+          **Install on the phone:** tap `TVMonitor.apk` below. Android will ask
+          whether to allow installing from the browser - allow it, then open the
+          app when it finishes.
+
+          Installing over the top keeps the Facebook login and the listings
+          already found.
+          NOTES
+          echo "" >> notes.md
+          echo "Built from \`${GITHUB_REF_NAME}\` (\`${GITHUB_SHA}\`)." >> notes.md
+
+          gh release create "build-${{ github.run_number }}" \
+            app/build/outputs/apk/debug/TVMonitor.apk \
+            --target "${GITHUB_SHA}" \
+            --title "TV Monitor - build ${{ github.run_number }}" \
+            --notes-file notes.md
