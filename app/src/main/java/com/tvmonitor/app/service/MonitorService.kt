@@ -356,7 +356,8 @@ class MonitorService : Service() {
         put("maxAgeMinutes", 60)
         // Read fresh each scan, so switching it off in the app takes effect on
         // the next check rather than needing the service restarted.
-        put("requireKnownAge", Settings.requireKnownAge(this))
+        // Qualified: inside apply, a bare "this" is the JSONObject being built.
+        put("requireKnownAge", Settings.requireKnownAge(this@MonitorService))
         put(
             "blockWords",
             "stand, stands, bracket, brackets, mount, mounts, mounted, " +
