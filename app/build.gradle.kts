@@ -13,7 +13,10 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        // Stamped with the CI run that produced the APK. Diagnosing the last
+        // crash cost a round purely to establish which build was on the phone,
+        // because every build called itself 1.0 and the trader had several.
+        versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "dev")
     }
 
     buildTypes {

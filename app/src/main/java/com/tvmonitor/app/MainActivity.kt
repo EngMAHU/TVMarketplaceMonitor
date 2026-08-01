@@ -95,12 +95,17 @@ class MainActivity : AppCompatActivity() {
         val report = listOfNotNull(crash, exit).joinToString("\n\n----\n\n")
         if (report.isBlank()) return
 
+        // Which build this came from. Without it, a trace has to be matched to a
+        // build by counting line numbers in three candidates - which is exactly
+        // what reading the last one required.
+        val stamped = "build $appVersion\n\n$report"
+
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("The app closed unexpectedly")
-            .setMessage(report.take(4000))
+            .setMessage(stamped.take(4000))
             .setPositiveButton("Copy") { _, _ ->
                 val cb = getSystemService(android.content.ClipboardManager::class.java)
-                cb.setPrimaryClip(android.content.ClipData.newPlainText("crash", report))
+                cb.setPrimaryClip(android.content.ClipData.newPlainText("crash", stamped))
             }
             .setNegativeButton("Close", null)
             .show()
@@ -145,6 +150,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    /** The CI run this APK was built from, e.g. "1.0.8". "1.0.dev" if local. */
+    private val appVersion: String
+        get() = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
+        } catch (e: Exception) {
+            "unknown"
+        }
 
     private fun logout() {
         MonitorService.stop(this)

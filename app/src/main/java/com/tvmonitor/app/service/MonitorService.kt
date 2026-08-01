@@ -90,7 +90,7 @@ class MonitorService : Service() {
             private set
     }
 
-    private val handler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var db: AppDatabase
     private var webView: WebView? = null
@@ -141,7 +141,7 @@ class MonitorService : Service() {
         )
         acquireWakeLock()
         initWebView()
-        handler.post(checkRunnable)
+        mainHandler.post(checkRunnable)
     }
 
     @SuppressLint("WakelockTimeout")
@@ -153,23 +153,46 @@ class MonitorService : Service() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun initWebView() {
-        handler.post {
-            webView = WebView(applicationContext).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.loadsImagesAutomatically = false
-                settings.blockNetworkImage = true
-                settings.userAgentString =
-                    "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
-                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                    "Chrome/125.0.0.0 Mobile Safari/537.36"
+        mainHandler.post {
+            // Built through a local rather than WebView(...).apply { }, and that
+            // is the entire bug that closed this app for four builds running.
+            //
+            // Inside apply the WebView is the implicit receiver, so an
+            // unqualified name is resolved against it before the enclosing
+            // class. android.view.View has getHandler(), which Kotlin exposes
+            // as a property named `handler` - so `handler.postDelayed(...)` in
+            // the WebViewClient below never meant this service's Handler. It
+            // meant the view's own, and View.getHandler() returns null until
+            // the view is attached to a window. This WebView is built in a
+            // service and never added to any layout, so it was null every time.
+            //
+            // What that produced was a NullPointerException on the main thread
+            // in onPageFinished, killing the app roughly ten seconds into every
+            // scan - which Android reported as WebView having crashed it, and
+            // which sent three rounds of fixes after the wrong thing. It also
+            // silently disabled the renderer-death recovery, whose first act
+            // was another call on that same null handler.
+            //
+            // A local variable keeps the WebView out of the receiver chain, so
+            // a bare name can only mean what it appears to mean. The field is
+            // named mainHandler for the same reason: View has no such member,
+            // so the mistake cannot be made again by accident.
+            val wv = WebView(applicationContext)
+            wv.settings.javaScriptEnabled = true
+            wv.settings.domStorageEnabled = true
+            wv.settings.loadsImagesAutomatically = false
+            wv.settings.blockNetworkImage = true
+            wv.settings.userAgentString =
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/125.0.0.0 Mobile Safari/537.36"
 
-                CookieManager.getInstance().setAcceptCookie(true)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
 
-                addJavascriptInterface(ScraperInterface(), "Android")
+            wv.addJavascriptInterface(ScraperInterface(), "Android")
 
-                webViewClient = object : WebViewClient() {
+            wv.webViewClient = object : WebViewClient() {
                     override fun onPageStarted(
                         view: WebView, url: String?, favicon: android.graphics.Bitmap?
                     ) {
@@ -182,7 +205,7 @@ class MonitorService : Service() {
                     }
 
                     override fun onPageFinished(view: WebView, url: String) {
-                        handler.postDelayed({
+                        mainHandler.postDelayed({
                             // Ten seconds is long enough for this WebView to have
                             // been thrown away: a renderer death replaces it, and
                             // stopping the monitor tears it down. destroy() frees
@@ -243,7 +266,7 @@ class MonitorService : Service() {
                         // before a replacement is built. Posted rather than done
                         // here: destroying a WebView from inside its own callback
                         // frees an object the caller is still unwinding through.
-                        handler.post {
+                        mainHandler.post {
                             destroyWebView(view)
                             initWebView()
                             finishCheck(checkGeneration, stalled = true)
@@ -251,7 +274,10 @@ class MonitorService : Service() {
                         return true
                     }
                 }
-            }
+
+            // Published only once it is fully built, so that the identity check
+            // in onPageFinished cannot match a half-configured WebView.
+            webView = wv
         }
     }
 
@@ -320,7 +346,7 @@ class MonitorService : Service() {
                 NotificationHelper.notifySignedOut(this)
             }
             scope.launch { updateServiceNotification() }
-            handler.postDelayed(checkRunnable, SIGNED_OUT_RETRY)
+            mainHandler.postDelayed(checkRunnable, SIGNED_OUT_RETRY)
             return
         }
         if (signedOut) {
@@ -329,7 +355,7 @@ class MonitorService : Service() {
         }
 
         if (isChecking) {
-            handler.postDelayed(checkRunnable, CHECK_INTERVAL)
+            mainHandler.postDelayed(checkRunnable, CHECK_INTERVAL)
             return
         }
         isChecking = true
@@ -345,11 +371,11 @@ class MonitorService : Service() {
         // stayed latched forever. The service survived that in the worst possible
         // shape: alive, holding a wake lock, still showing "TV Monitor Active",
         // and never scanning again. Nothing about it looked wrong from outside.
-        handler.postDelayed({ finishCheck(generation, stalled = true) }, CHECK_TIMEOUT)
+        mainHandler.postDelayed({ finishCheck(generation, stalled = true) }, CHECK_TIMEOUT)
 
         // A null WebView here means one is being rebuilt after a renderer death.
         // Nothing loads, and the watchdog above is what notices.
-        handler.post { webView?.loadUrl(url) }
+        mainHandler.post { webView?.loadUrl(url) }
     }
 
     /**
@@ -371,8 +397,8 @@ class MonitorService : Service() {
         checkGeneration++
         isChecking = false
         if (stalled) stalls++ else { stalls = 0; checkCount++ }
-        handler.removeCallbacks(checkRunnable)
-        handler.postDelayed(checkRunnable, CHECK_INTERVAL)
+        mainHandler.removeCallbacks(checkRunnable)
+        mainHandler.postDelayed(checkRunnable, CHECK_INTERVAL)
         scope.launch { updateServiceNotification() }
     }
 
@@ -389,7 +415,7 @@ class MonitorService : Service() {
             }
             scope.launch {
                 try { processResults(json) } catch (e: Exception) { e.printStackTrace() }
-                finally { handler.post { finishCheck(generation, stalled = false) } }
+                finally { mainHandler.post { finishCheck(generation, stalled = false) } }
             }
         }
     }
@@ -469,7 +495,7 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         isRunning = false
-        handler.removeCallbacksAndMessages(null)
+        mainHandler.removeCallbacksAndMessages(null)
         scope.cancel()
         wakeLock?.let { if (it.isHeld) it.release() }
         // It is ongoing, so it would otherwise outlive the monitor it describes.
@@ -478,7 +504,7 @@ class MonitorService : Service() {
         // no live WebView rather than a freed one.
         val dying = webView
         webView = null
-        handler.post { destroyWebView(dying) }
+        mainHandler.post { destroyWebView(dying) }
         super.onDestroy()
     }
 
