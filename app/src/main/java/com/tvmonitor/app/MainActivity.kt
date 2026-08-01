@@ -19,6 +19,10 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.tvmonitor.app.adapter.ListingAdapter
 import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.service.MonitorService
+import com.tvmonitor.app.util.ScanStatus
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -27,6 +31,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var emptyText: TextView
     private lateinit var logoutBtn: Button
+    private lateinit var scanSourceText: TextView
+    private lateinit var scanCountsText: TextView
+    private lateinit var scanRejectsText: TextView
 
     private val notifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -40,6 +47,9 @@ class MainActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         emptyText = findViewById(R.id.emptyText)
         logoutBtn = findViewById(R.id.logoutBtn)
+        scanSourceText = findViewById(R.id.scanSourceText)
+        scanCountsText = findViewById(R.id.scanCountsText)
+        scanRejectsText = findViewById(R.id.scanRejectsText)
         val recyclerView = findViewById<RecyclerView>(R.id.listingsRecycler)
         val swipeRefresh = findViewById<SwipeRefreshLayout>(R.id.swipeRefresh)
 
@@ -59,6 +69,8 @@ class MainActivity : AppCompatActivity() {
             adapter.submitList(listings)
             emptyText.visibility = if (listings.isEmpty()) View.VISIBLE else View.GONE
         }
+
+        ScanStatus.latest.observe(this) { report -> showScanReport(report) }
 
         toggleBtn.setOnClickListener { toggleMonitoring() }
         logoutBtn.setOnClickListener { logout() }
@@ -92,6 +104,31 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * What the last scan saw, in the card that used to hold three hardcoded
+     * lines - one of which described a search radius the app does not use and a
+     * check interval it never ran at.
+     *
+     * The rejection counts are the point. Six listings found means nothing on
+     * its own: six out of eight is a market, six out of ninety is a filter doing
+     * most of the work, and until now the app showed the same thing either way.
+     */
+    private fun showScanReport(report: ScanStatus.Report?) {
+        if (report == null) return
+        val time = SimpleDateFormat("HH:mm", Locale.UK).format(Date(report.at))
+
+        scanSourceText.text = "${report.source} - $time"
+        scanCountsText.text = when {
+            report.error != null -> "Scan failed: ${report.error}"
+            // Not "no TVs". The page rendered and held no cards at all, which is
+            // what Facebook serves when it is rate limiting or refusing.
+            report.blank -> "Page came back empty - no cards at all"
+            else -> "${report.total} cards read, ${report.kept} passed the filters"
+        }
+        scanRejectsText.text =
+            if (report.blank || report.error != null) "" else report.breakdown()
+    }
+
     override fun onResume() {
         super.onResume()
         updateUI()
@@ -116,7 +153,7 @@ class MainActivity : AppCompatActivity() {
             )
         )
         statusText.text = if (running)
-            "Checking the Liverpool and Manchester TV feeds in turn, one every 2.5 minutes"
+            "Four feeds in turn - Liverpool and Manchester, search and category"
         else
             "Monitor is stopped. Tap below to start."
     }

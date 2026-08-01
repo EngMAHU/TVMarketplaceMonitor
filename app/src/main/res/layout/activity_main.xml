@@ -70,25 +70,28 @@
         android:padding="12dp">
 
         <TextView
-            android:layout_width="wrap_content"
+            android:id="@+id/scanSourceText"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Search: TVs on Facebook Marketplace"
+            android:text="No scan yet"
             android:textColor="@color/text_primary"
             android:textSize="14sp"
             android:textStyle="bold" />
 
         <TextView
-            android:layout_width="wrap_content"
+            android:id="@+id/scanCountsText"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Location: Liverpool, 60 miles radius"
+            android:text="Liverpool and Manchester, search and category feeds in turn"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 
         <TextView
-            android:layout_width="wrap_content"
+            android:id="@+id/scanRejectsText"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Sort: Newest first | Check: Every 1 minute"
+            android:text="One feed every 2.5 minutes"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
     </LinearLayout>

@@ -18,6 +18,7 @@ import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.data.Listing
 import com.tvmonitor.app.util.FacebookSession
 import com.tvmonitor.app.util.NotificationHelper
+import com.tvmonitor.app.util.ScanStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,25 +56,63 @@ class MonitorService : Service() {
         // cookie is re-read on this timer and no page is loaded at all.
         private const val SIGNED_OUT_RETRY = 60_000L
 
-        // v15.1's two sources, in v15.1's shape, at the trader's request.
-        //
-        // Both are category feeds. Worth recording what that costs, because it is
-        // measurable and was measured: category pages carry no sort control and
-        // ignore sortBy, so the feed is unordered, and across 358 alerts on the
-        // desktop the youngest listing a category feed ever produced was seven
-        // minutes old with a median of thirteen. The trader's own manual SEARCH
-        // returns listings two to three minutes old. Listings sell in about ten.
-        //
-        // The parameters are kept exactly as v15.1 built them, sortBy included,
-        // even though a category page ignores it - this is a faithful port, not
-        // an improved one.
-        private val URLS = listOf(
-            "https://www.facebook.com/marketplace/liverpool/tvs/" +
-            "?sortBy=creation_time_descend&daysSinceListed=1&radius=113&exact=false",
+        private data class Source(val name: String, val url: String)
 
-            // Centred on Manchester with a 30 km radius, as v15.1 had it.
-            "https://www.facebook.com/marketplace/manchester/tvs/" +
-            "?sortBy=creation_time_descend&daysSinceListed=1&radius=30&exact=false"
+        // Four feeds, read one per interval, so the request rate is exactly what
+        // it was: one page load every 150 seconds and no more. What changed is
+        // what gets loaded.
+        //
+        // v15.1's two sources are category feeds, and the cost of that was
+        // measured rather than guessed: category pages carry no sort control and
+        // ignore sortBy, so the feed comes back unordered. Across 358 alerts on
+        // the desktop the youngest listing a category feed ever produced was
+        // seven minutes old, median thirteen. The trader's own manual SEARCH
+        // returns listings two to three minutes old. Listings sell in about ten,
+        // which is the whole problem: a median of thirteen is a tool reporting
+        // sales rather than finding them.
+        //
+        // A search feed honours sortBy, so the newest listing is the first one on
+        // the page. Reading each feed every ten minutes instead of five still
+        // beats that comfortably - a sorted feed read every ten minutes surfaces
+        // a listing at a median of five to eight minutes old, against thirteen -
+        // and it does so without asking Facebook for anything more often.
+        //
+        // The category feeds stay in the rotation rather than being replaced, for
+        // one specific reason: a search for "tv" matches on the title, so a
+        // listing called only "Television" reaches the category feed and not the
+        // search. classify() accepts those, so dropping the category feeds would
+        // quietly lose listings the filters were built to catch.
+        //
+        // None of this could be checked from here - Facebook is unreachable from
+        // the machine this was written on - so ScanStatus reports every feed by
+        // name. A search feed returning nothing shows up in the app within one
+        // cycle instead of being mistaken for a quiet afternoon.
+        private val SOURCES = listOf(
+            Source(
+                "Liverpool search",
+                "https://www.facebook.com/marketplace/liverpool/search/" +
+                "?query=tv&sortBy=creation_time_descend&daysSinceListed=1" +
+                "&radius=113&exact=false"
+            ),
+            Source(
+                "Manchester search",
+                "https://www.facebook.com/marketplace/manchester/search/" +
+                "?query=tv&sortBy=creation_time_descend&daysSinceListed=1" +
+                "&radius=30&exact=false"
+            ),
+
+            // v15.1's own two, unchanged, sortBy included even though a category
+            // page ignores it. Kept as the faithful port they were asked to be.
+            Source(
+                "Liverpool category",
+                "https://www.facebook.com/marketplace/liverpool/tvs/" +
+                "?sortBy=creation_time_descend&daysSinceListed=1&radius=113&exact=false"
+            ),
+            Source(
+                "Manchester category",
+                "https://www.facebook.com/marketplace/manchester/tvs/" +
+                "?sortBy=creation_time_descend&daysSinceListed=1&radius=30&exact=false"
+            )
         )
 
         fun start(context: Context) {
@@ -102,6 +141,10 @@ class MonitorService : Service() {
     private var rendererDeaths = 0
     private var stalls = 0
     private var signedOut = false
+
+    // Which feed the check in flight is reading. Reported with its counts, so a
+    // source that has stopped producing can be told from a quiet market.
+    @Volatile private var currentSource = ""
 
     // Which check is in flight. Every check gets a new number, and only a report
     // carrying the current one is allowed to end it - see finishCheck.
@@ -289,8 +332,9 @@ class MonitorService : Service() {
         }
         isChecking = true
         val generation = ++checkGeneration
-        val url = URLS[urlIndex % URLS.size]
+        val source = SOURCES[urlIndex % SOURCES.size]
         urlIndex++
+        currentSource = source.name
 
         // The watchdog, and the reason this method now hands out generations.
         //
@@ -304,7 +348,7 @@ class MonitorService : Service() {
 
         // A null WebView here means one is being rebuilt after a renderer death.
         // Nothing loads, and the watchdog above is what notices.
-        handler.post { webView?.loadUrl(url) }
+        handler.post { webView?.loadUrl(source.url) }
     }
 
     /**
@@ -359,11 +403,16 @@ class MonitorService : Service() {
         // the way the laptop did.
         if (root.optBoolean("blank", false)) {
             blankStreak++
+            reportScan(root, kept = 0, blank = true)
             return
         }
         blankStreak = 0
 
         val array = root.optJSONArray("listings") ?: return
+        // Reported before the early return below. A page full of cards that the
+        // filters rejected down to nothing is the case most worth seeing, and it
+        // is exactly the one that used to leave no trace anywhere in the app.
+        reportScan(root, kept = array.length(), blank = false)
         if (array.length() == 0) return
 
         val listings = ArrayList<Listing>()
@@ -395,6 +444,31 @@ class MonitorService : Service() {
 
         val weekAgo = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
         db.listingDao().deleteOlderThan(weekAgo)
+    }
+
+    /**
+     * Publishes what the scan counted. scan.js has always sent these; nothing
+     * ever read them, so the app could show that six listings got through and
+     * never that sixty were thrown away to get there.
+     */
+    private fun reportScan(root: JSONObject, kept: Int, blank: Boolean) {
+        val s = root.optJSONObject("stats")
+        ScanStatus.post(
+            ScanStatus.Report(
+                at = System.currentTimeMillis(),
+                source = currentSource,
+                blank = blank,
+                total = s?.optInt("total", 0) ?: 0,
+                kept = kept,
+                notTv = s?.optInt("notTv", 0) ?: 0,
+                tooFar = s?.optInt("tooFar", 0) ?: 0,
+                tooOld = s?.optInt("tooOld", 0) ?: 0,
+                noDate = s?.optInt("noDate", 0) ?: 0,
+                tooSmall = s?.optInt("tooSmall", 0) ?: 0,
+                tooDear = s?.optInt("tooDear", 0) ?: 0,
+                error = root.optString("error", "").ifBlank { null }
+            )
+        )
     }
 
     private suspend fun updateServiceNotification() {
