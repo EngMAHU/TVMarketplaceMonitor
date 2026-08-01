@@ -183,6 +183,18 @@ class MonitorService : Service() {
 
                     override fun onPageFinished(view: WebView, url: String) {
                         handler.postDelayed({
+                            // Ten seconds is long enough for this WebView to have
+                            // been thrown away: a renderer death replaces it, and
+                            // stopping the monitor tears it down. destroy() frees
+                            // the native half while this callback still holds the
+                            // Java object, and calling into one of those is a
+                            // SIGSEGV - no Java exception, nothing for the crash
+                            // recorder to catch, and Android reporting it as
+                            // WebView having crashed the app. The field is the
+                            // authority on which WebView is live, so anything that
+                            // is no longer it is left alone.
+                            if (view !== webView) return@postDelayed
+
                             // Wrapped because this runs on the main thread from a
                             // WebView callback: anything thrown here closes the
                             // app, and Android reports that as a WebView fault.
@@ -227,11 +239,12 @@ class MonitorService : Service() {
                         view: WebView, detail: android.webkit.RenderProcessGoneDetail
                     ): Boolean {
                         rendererDeaths++
-                        // The dead WebView can never be reused; it must be detached
-                        // and destroyed before a replacement is built.
+                        // The dead WebView can never be reused, so it is torn down
+                        // before a replacement is built. Posted rather than done
+                        // here: destroying a WebView from inside its own callback
+                        // frees an object the caller is still unwinding through.
                         handler.post {
-                            try { view.destroy() } catch (e: Exception) { }
-                            if (webView === view) webView = null
+                            destroyWebView(view)
                             initWebView()
                             finishCheck(checkGeneration, stalled = true)
                         }
@@ -239,6 +252,38 @@ class MonitorService : Service() {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Tears a WebView down so that nothing can reach it afterwards.
+     *
+     * Clearing the field first is the point of this method, not housekeeping.
+     * Every delayed callback that holds a WebView checks it against this field
+     * before touching it, so clearing it before the destroy is what turns those
+     * callbacks into no-ops. Do it the other way round and there is a window in
+     * which a pending callback sees a WebView that matches the field and has
+     * already been freed.
+     *
+     * That matters more than the usual amount here because the failure is not an
+     * exception. A destroyed WebView is a freed native object; calling into one
+     * crashes the process in native code, which no try/catch and no
+     * uncaught-exception handler can see. It is the emptiness of the crash
+     * recorder, and it is what Android was reporting as WebView's fault.
+     *
+     * Main thread only.
+     */
+    private fun destroyWebView(view: WebView?) {
+        if (view == null) return
+        if (webView === view) webView = null
+        try {
+            view.stopLoading()
+            // Or a page still unloading can call back into a half-torn service.
+            view.webViewClient = WebViewClient()
+            view.removeJavascriptInterface("Android")
+            view.destroy()
+        } catch (e: Exception) {
+            // Already gone; there is nothing left to release.
         }
     }
 
@@ -429,7 +474,11 @@ class MonitorService : Service() {
         wakeLock?.let { if (it.isHeld) it.release() }
         // It is ongoing, so it would otherwise outlive the monitor it describes.
         NotificationHelper.clearSignedOut(this)
-        handler.post { webView?.destroy(); webView = null }
+        // Cleared before the post, so that any callback that slips through finds
+        // no live WebView rather than a freed one.
+        val dying = webView
+        webView = null
+        handler.post { destroyWebView(dying) }
         super.onDestroy()
     }
 

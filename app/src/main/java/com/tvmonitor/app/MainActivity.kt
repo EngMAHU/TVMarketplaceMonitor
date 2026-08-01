@@ -19,6 +19,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.tvmonitor.app.adapter.ListingAdapter
 import com.tvmonitor.app.data.AppDatabase
 import com.tvmonitor.app.service.MonitorService
+import com.tvmonitor.app.util.ExitReasons
 
 class MainActivity : AppCompatActivity() {
 
@@ -64,29 +65,42 @@ class MainActivity : AppCompatActivity() {
         logoutBtn.setOnClickListener { logout() }
 
         requestNotifPermission()
-        showLastCrashIfAny()
+        showLastFailureIfAny()
         updateUI()
     }
 
     /**
-     * Shows the stack trace of the previous crash, once, in a dialog that can be
-     * copied out.
+     * Shows why the app last closed, once, in a dialog that can be copied out.
      *
-     * Android's answer to a crash inside a WebView is a prompt offering to
-     * uninstall WebView updates system-wide - which changes every app on the
-     * phone and fixes nothing when the fault is here. With no way to attach a
-     * debugger to this phone, a trace the user can read back is the only route
-     * from "it closes" to a fix.
+     * Two sources, because one of them was never going to be enough. The
+     * uncaught-exception handler catches bugs in this app's own Kotlin. It
+     * stayed empty through every occurrence of the app closing - which was read
+     * as "no crash happened" when what it actually means is that the process
+     * died in a way no Java handler can see: a native crash inside WebView, an
+     * ANR, or the low-memory killer. So the system's own record is read too.
+     *
+     * Android's answer to any of these is a prompt offering to uninstall WebView
+     * updates system-wide, which changes every app on the phone and fixes
+     * nothing when the fault is here. With no way to attach a debugger to this
+     * phone, a reading the trader can send back is the only route from "it keeps
+     * stopping" to a fix.
      */
-    private fun showLastCrashIfAny() {
-        val crash = App.lastCrash(this) ?: return
-        App.clearCrash(this)
+    private fun showLastFailureIfAny() {
+        val crash = App.lastCrash(this)?.also { App.clearCrash(this) }
+        val exit = ExitReasons.unreportedExit(this)
+
+        // The stack trace is the more useful of the two whenever there is one,
+        // so it leads. The system's reason is still appended: it says whether
+        // the trace is what actually killed the process or just preceded it.
+        val report = listOfNotNull(crash, exit).joinToString("\n\n----\n\n")
+        if (report.isBlank()) return
+
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("The app closed unexpectedly")
-            .setMessage(crash.take(3000))
+            .setMessage(report.take(4000))
             .setPositiveButton("Copy") { _, _ ->
                 val cb = getSystemService(android.content.ClipboardManager::class.java)
-                cb.setPrimaryClip(android.content.ClipData.newPlainText("crash", crash))
+                cb.setPrimaryClip(android.content.ClipData.newPlainText("crash", report))
             }
             .setNegativeButton("Close", null)
             .show()
