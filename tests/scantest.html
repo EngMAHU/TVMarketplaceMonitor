@@ -81,6 +81,7 @@ window.addEventListener("unhandledrejection", e => {
   // late from ending the check that started after it was given up on.
   const CFG = {
     gen: 7,
+    cities: "liverpool, manchester",
     minInches: 0, maxPrice: 0, maxAgeMinutes: 60, requireKnownAge: true,
     blockWords: "stand, stands, bracket, brackets, mount, mounts, mounted, " +
                 "firestick, firesticks, fire stick, fire tv stick, fire sticks",
@@ -237,6 +238,30 @@ window.addEventListener("unhandledrejection", e => {
       JSON.stringify(r.stats));
 
     CFG.minInches = saved;
+  }
+
+  // -- a chosen town is never "too far" from itself -------------------------
+  //
+  // The trap this guards: FAR_PLACES names Birmingham, Leeds and Sheffield
+  // because they leaked past a radius and were not worth a drive. Once the
+  // trader can choose their own towns, adding one of those would reject every
+  // listing it found - silently, and looking exactly like a quiet feed.
+  {
+    check("Birmingham is too far by default", isTooFar("Birmingham") === true);
+    check("but not when it is one of the trader's towns",
+      isTooFar("Birmingham", "liverpool, birmingham") === false);
+    check("Leeds is still too far when it was not chosen",
+      isTooFar("Leeds", "liverpool, birmingham") === true);
+    check("and isTooFar with no list behaves exactly as before",
+      isTooFar("Sheffield") === true && isTooFar("Chester") === false);
+  }
+  {
+    const saved = CFG.cities;
+    CFG.cities = "liverpool, birmingham";
+    const r = run([card(70, "£150", 'Sony 50" Smart TV', "Birmingham")], fresh(70));
+    check("a Birmingham listing survives once Birmingham is a source",
+      (r.listings || []).length === 1, r.error || JSON.stringify(r.stats));
+    CFG.cities = saved;
   }
 
   // -- a price cap, likewise, never rejects a listing with no price ---------

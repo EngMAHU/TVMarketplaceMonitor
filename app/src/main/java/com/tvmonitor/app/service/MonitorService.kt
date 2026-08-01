@@ -32,15 +32,16 @@ import java.util.Locale
 class MonitorService : Service() {
 
     companion object {
-        // 2.5 minutes between loads, alternating the two sources - which is
-        // v15.1's own rate: it walked two sources every five minutes, so each was
-        // read every five minutes and the pair cost about 24 page loads an hour.
+        // The interval is the trader's now, read from Settings on every check.
+        // This is only the fallback used before the first read succeeds.
         //
-        // Not raised, for a reason worth stating plainly: the desktop build ran at
-        // 120 loads an hour and Facebook returned "You're Temporarily Blocked. It
-        // looks like you were misusing this feature by going too fast." This phone
-        // is the only channel the trader has left that still works, so the cost of
-        // losing it is everything.
+        // Worth stating plainly wherever it is set: the desktop build ran at 120
+        // page loads an hour and Facebook returned "You're Temporarily Blocked.
+        // It looks like you were misusing this feature by going too fast." This
+        // phone is the only channel the trader has left that still works, so the
+        // cost of losing it is everything. The settings screen enforces a floor
+        // and shows the resulting loads per hour rather than leaving the risk to
+        // be discovered.
         private const val CHECK_INTERVAL = 150_000L
 
         // Facebook renders Marketplace results client-side; the HTML shell arrives
@@ -56,26 +57,17 @@ class MonitorService : Service() {
         // cookie is re-read on this timer and no page is loaded at all.
         private const val SIGNED_OUT_RETRY = 60_000L
 
-        // v15.1's two sources, in v15.1's shape, at the trader's request.
+        // The sources are built from the trader's settings - see Filters.urls().
         //
-        // Both are category feeds. Worth recording what that costs, because it is
-        // measurable and was measured: category pages carry no sort control and
-        // ignore sortBy, so the feed is unordered, and across 358 alerts on the
-        // desktop the youngest listing a category feed ever produced was seven
-        // minutes old with a median of thirteen. The trader's own manual SEARCH
-        // returns listings two to three minutes old. Listings sell in about ten.
+        // They used to be two hard-coded category feeds, and what that cost was
+        // measurable and was measured: a category page has no sort control, so
+        // it ignores sortBy and returns an unordered feed. Across 358 alerts on
+        // the desktop the youngest listing one ever produced was seven minutes
+        // old, median thirteen. The trader's own manual SEARCH returns listings
+        // two to three minutes old, and listings sell in about ten - so the feed
+        // that ignored the sort was losing most of the window it was built for.
         //
-        // The parameters are kept exactly as v15.1 built them, sortBy included,
-        // even though a category page ignores it - this is a faithful port, not
-        // an improved one.
-        private val URLS = listOf(
-            "https://www.facebook.com/marketplace/liverpool/tvs/" +
-            "?sortBy=creation_time_descend&daysSinceListed=1&radius=113&exact=false",
-
-            // Centred on Manchester with a 30 km radius, as v15.1 had it.
-            "https://www.facebook.com/marketplace/manchester/tvs/" +
-            "?sortBy=creation_time_descend&daysSinceListed=1&radius=30&exact=false"
-        )
+        // Search honours sortBy, which is why it is now the default.
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
@@ -328,6 +320,12 @@ class MonitorService : Service() {
             // Carried through the scan and handed back in its report, so a reply
             // from a check already given up on can be told from a live one.
             put("gen", generation)
+            // The trader's own towns, so the far-places safety net cannot reject
+            // them. That list names Birmingham, Leeds and Sheffield among others
+            // because they leaked past a radius and were not worth a drive - but
+            // a town chosen as a source cannot be too far from itself, and
+            // without this, adding one would silently reject everything it found.
+            put("cities", f.cityList().joinToString(", "))
             put("minInches", f.minInches)
             put("maxPrice", f.maxPrice)
             put("maxAgeMinutes", f.maxAgeMinutes)
@@ -336,6 +334,21 @@ class MonitorService : Service() {
             put("excludeExtra", f.excludeExtra)
         }.toString()
     }
+
+    /**
+     * Milliseconds between page loads, as the trader set it.
+     *
+     * Read rather than cached because the settings screen can change it while
+     * the monitor runs, and falls back rather than throws: a service that stops
+     * scanning because a preference could not be read is the worst of the
+     * outcomes available here.
+     */
+    private fun interval(): Long =
+        try {
+            Settings.load(this).checkIntervalSeconds * 1000L
+        } catch (e: Exception) {
+            CHECK_INTERVAL
+        }
 
     private fun performCheck() {
         // The session can expire at any time and nothing announces it. A
@@ -358,12 +371,16 @@ class MonitorService : Service() {
         }
 
         if (isChecking) {
-            mainHandler.postDelayed(checkRunnable, CHECK_INTERVAL)
+            mainHandler.postDelayed(checkRunnable, interval())
             return
         }
         isChecking = true
         val generation = ++checkGeneration
-        val url = URLS[urlIndex % URLS.size]
+
+        // Read per check, so changing the towns or the radius on the filters
+        // screen takes effect on the next load with the monitor left running.
+        val urls = Settings.load(this).urls()
+        val url = urls[urlIndex % urls.size]
         urlIndex++
 
         // The watchdog, and the reason this method now hands out generations.
@@ -401,7 +418,7 @@ class MonitorService : Service() {
         isChecking = false
         if (stalled) stalls++ else { stalls = 0; checkCount++ }
         mainHandler.removeCallbacks(checkRunnable)
-        mainHandler.postDelayed(checkRunnable, CHECK_INTERVAL)
+        mainHandler.postDelayed(checkRunnable, interval())
         scope.launch { updateServiceNotification() }
     }
 

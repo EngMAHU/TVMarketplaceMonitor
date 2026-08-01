@@ -90,7 +90,7 @@
       var verdict = classify(title, blockWords, extra);
       if (!verdict.ok) { stats.notTv++; continue; }
 
-      if (isTooFar(place)) { stats.tooFar++; continue; }
+      if (isTooFar(place, CFG.cities)) { stats.tooFar++; continue; }
 
       // Only applied when both the setting asks for it and the ported filter set
       // provides it. v15.1 has no size rule at all, so the function is absent

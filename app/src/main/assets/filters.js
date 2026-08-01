@@ -74,9 +74,16 @@ const FAR_PLACES = [
   "holyhead", "caernarfon", "pwllheli", "dolgellau"
 ];
 
-function isTooFar(place) {
+// homeCities is the trader's own list of sources, and it wins over FAR_PLACES.
+// A town chosen as a source cannot be too far from itself: the far list names
+// Birmingham, Leeds and Sheffield because they leaked past a radius and were
+// not worth a drive, so adding any of them as a city would otherwise reject
+// every listing it found - silently, and looking exactly like a quiet feed.
+function isTooFar(place, homeCities) {
   const p = normalise(place);
   if (!p) return false;
+  const home = Array.isArray(homeCities) ? homeCities : splitTerms(homeCities || "");
+  for (const h of home) if (h && hasTerm(p, h)) return false;
   for (const far of FAR_PLACES) if (hasTerm(p, far)) return true;
   return false;
 }

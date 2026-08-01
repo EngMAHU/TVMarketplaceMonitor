@@ -40,6 +40,73 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <!-- Where -->
+            <TextView
+                style="@style/FilterLabel"
+                android:layout_marginTop="0dp"
+                android:text="Towns to watch" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="Comma separated, as Facebook spells them: liverpool, manchester, chester. They are read one per check, in turn." />
+
+            <EditText
+                android:id="@+id/citiesInput"
+                style="@style/FilterInput"
+                android:inputType="textNoSuggestions" />
+
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Distance from each town (miles)" />
+
+            <EditText
+                android:id="@+id/radiusInput"
+                style="@style/FilterInput"
+                android:inputType="number" />
+
+            <!-- Newest first -->
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/useSearchSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="Newest listings first"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="ON searches Marketplace, which really does sort by newest. OFF uses the TV category page, which ignores sorting entirely and returns an unordered feed - that is why listings arrived 7-13 minutes old before." />
+
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Search for" />
+
+            <EditText
+                android:id="@+id/searchQueryInput"
+                style="@style/FilterInput"
+                android:inputType="textNoSuggestions" />
+
+            <!-- Interval -->
+            <TextView
+                style="@style/FilterLabel"
+                android:text="Check every (minutes)" />
+
+            <TextView
+                style="@style/FilterHint"
+                android:text="This is per page load, not per town. Facebook blocked the desktop version at 120 loads an hour." />
+
+            <EditText
+                android:id="@+id/intervalInput"
+                style="@style/FilterInput"
+                android:inputType="numberDecimal" />
+
+            <TextView
+                android:id="@+id/rateSummary"
+                style="@style/FilterHint"
+                android:layout_marginTop="8dp"
+                android:textStyle="bold" />
+
             <!-- Age -->
             <TextView
                 style="@style/FilterLabel"
@@ -131,7 +198,7 @@
             <TextView
                 style="@style/FilterHint"
                 android:layout_marginTop="24dp"
-                android:text="Not adjustable here: how often it checks. It reads one feed every 2.5 minutes, which is the rate the desktop version was blocked for exceeding. This phone is the only channel still working." />
+                android:text="What is not adjustable here is the matching itself - what counts as a television, what is furniture, what is a wall-mounting advert. Those were worked out against a day of real listings and live in the app." />
 
         </LinearLayout>
     </ScrollView>
