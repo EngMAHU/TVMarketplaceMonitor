@@ -514,19 +514,19 @@ class MonitorService : Service() {
     private fun reportScan(root: JSONObject, kept: Int, blank: Boolean) {
         val s = root.optJSONObject("stats")
         val report = ScanStatus.Report(
-                at = System.currentTimeMillis(),
-                source = currentSource,
-                blank = blank,
-                total = s?.optInt("total", 0) ?: 0,
-                kept = kept,
-                notTv = s?.optInt("notTv", 0) ?: 0,
-                tooFar = s?.optInt("tooFar", 0) ?: 0,
-                tooOld = s?.optInt("tooOld", 0) ?: 0,
-                noDate = s?.optInt("noDate", 0) ?: 0,
-                tooSmall = s?.optInt("tooSmall", 0) ?: 0,
-                tooDear = s?.optInt("tooDear", 0) ?: 0,
-                noTitle = s?.optInt("noTitle", 0) ?: 0,
-                error = root.optString("error", "").ifBlank { null }
+            at = System.currentTimeMillis(),
+            source = currentSource,
+            blank = blank,
+            total = s?.optInt("total", 0) ?: 0,
+            kept = kept,
+            notTv = s?.optInt("notTv", 0) ?: 0,
+            tooFar = s?.optInt("tooFar", 0) ?: 0,
+            tooOld = s?.optInt("tooOld", 0) ?: 0,
+            noDate = s?.optInt("noDate", 0) ?: 0,
+            tooSmall = s?.optInt("tooSmall", 0) ?: 0,
+            tooDear = s?.optInt("tooDear", 0) ?: 0,
+            noTitle = s?.optInt("noTitle", 0) ?: 0,
+            error = root.optString("error", "").ifBlank { null }
         )
         lastReport = report
         ScanStatus.post(report)
