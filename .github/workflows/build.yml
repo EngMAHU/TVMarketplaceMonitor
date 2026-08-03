@@ -13,6 +13,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # Needed to publish the release below. Nothing else here writes.
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +49,30 @@ jobs:
         with:
           name: TVMonitor-APK
           path: app/build/outputs/apk/debug/TVMonitor.apk
+
+      # A rolling release, so the phone has one address that always holds the
+      # current build.
+      #
+      # The artifact above is the wrong shape for the person actually installing
+      # this. Downloading one needs a signed-in GitHub account and arrives as a
+      # zip that has to be extracted before Android will look at it - every time,
+      # on a phone. A release asset is a direct .apk link that needs no account
+      # and installs on tap.
+      #
+      # Marked as a prerelease because that is what it is: an unsigned debug
+      # build of a development branch.
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="latest-${GITHUB_REF_NAME//\//-}"
+          # Recreated rather than edited: re-uploading an asset of the same name
+          # onto an existing release fails, and a stale APK on a tag called
+          # "latest" is worse than no release at all.
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" \
+            app/build/outputs/apk/debug/TVMonitor.apk \
+            --title "Latest build - $GITHUB_REF_NAME" \
+            --notes "Debug build of \`$GITHUB_SHA\`. Unsigned; allow install from unknown sources." \
+            --prerelease \
+            --target "$GITHUB_SHA"
