@@ -287,97 +287,125 @@ class MonitorService : Service() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun initWebView() {
         handler.post {
-            webView = WebView(applicationContext).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.loadsImagesAutomatically = false
-                settings.blockNetworkImage = true
-                settings.userAgentString =
-                    "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
-                    "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                    "Chrome/125.0.0.0 Mobile Safari/537.36"
+            // Built on a named local, deliberately, rather than with apply.
+            //
+            // Inside an apply block the receiver is the WebView, and View has a
+            // getHandler(). Kotlin therefore resolved a bare "handler" in there
+            // to View.getHandler() instead of this service's field - silently,
+            // because both are Handlers and both compile. An offscreen WebView
+            // is never attached to a window and getHandler() returns null for
+            // one, so onPageFinished threw NullPointerException every single
+            // time, before scan.js was ever injected.
+            //
+            // That is why the app announced nothing. It was not the filters, or
+            // rate limiting, or a quiet market: no scan had ever completed. The
+            // diagnostics card read "No scan yet" while the button read STOP
+            // MONITORING, which is exactly what that combination meant.
+            //
+            // A named local has no implicit receiver, so a member of View can no
+            // longer stand in for a field of this class unnoticed.
+            val wv = WebView(applicationContext)
+            wv.settings.javaScriptEnabled = true
+            wv.settings.domStorageEnabled = true
+            wv.settings.loadsImagesAutomatically = false
+            wv.settings.blockNetworkImage = true
+            wv.settings.userAgentString =
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/125.0.0.0 Mobile Safari/537.36"
 
-                CookieManager.getInstance().setAcceptCookie(true)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
 
-                addJavascriptInterface(ScraperInterface(), "Android")
-                installCapture(this)
+            wv.addJavascriptInterface(ScraperInterface(), "Android")
+            installCapture(wv)
 
-                webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(
-                        view: WebView, url: String?, favicon: android.graphics.Bitmap?
-                    ) {
-                        // Fallback only. installCapture registers the real thing;
-                        // this covers the case where the device's WebView is too
-                        // old to support document-start scripts, where injecting
-                        // late is better than not at all. capture.js guards itself
-                        // with __tvcap__, so running twice costs nothing.
-                        if (!documentStartCapture) {
-                            try {
-                                view.evaluateJavascript(captureJs, null)
-                            } catch (e: Exception) {
-                            }
+            wv.webViewClient = object : WebViewClient() {
+                override fun onPageStarted(
+                    view: WebView, url: String?, favicon: android.graphics.Bitmap?
+                ) {
+                    // Fallback only. installCapture registers the real thing;
+                    // this covers the case where the device's WebView is too
+                    // old to support document-start scripts, where injecting
+                    // late is better than not at all. capture.js guards itself
+                    // with __tvcap__, so running twice costs nothing.
+                    if (!documentStartCapture) {
+                        try {
+                            view.evaluateJavascript(captureJs, null)
+                        } catch (e: Exception) {
                         }
-                    }
-
-                    override fun onPageFinished(view: WebView, url: String) {
-                        handler.postDelayed({
-                            // Wrapped because this runs on the main thread from a
-                            // WebView callback: anything thrown here closes the
-                            // app, and Android reports that as a WebView fault.
-                            try {
-                                if (assetError != null) {
-                                    finishCheck(checkGeneration, stalled = true)
-                                    return@postDelayed
-                                }
-                                view.evaluateJavascript(filtersJs, null)
-                                view.evaluateJavascript(
-                                    scanJs.replace("__CONFIG__", configJson(checkGeneration)),
-                                    null
-                                )
-                            } catch (e: Exception) {
-                                // Free the latch, or no further check is ever run.
-                                finishCheck(checkGeneration, stalled = true)
-                            }
-                        }, RENDER_WAIT)
-                    }
-
-                    override fun shouldOverrideUrlLoading(
-                        view: WebView, request: WebResourceRequest
-                    ): Boolean = false
-
-                    /**
-                     * The renderer died. Returning true keeps this app alive.
-                     *
-                     * This is the whole bug. A WebView runs the page in a separate
-                     * renderer process, and when that process is killed - which
-                     * Android does readily to a background app holding a page as
-                     * heavy as Facebook - the default behaviour is to kill the app
-                     * that owned it. Android then reports it as "The installed
-                     * version of WebView caused TV Monitor to crash" and offers to
-                     * uninstall WebView updates, which is a system-wide change that
-                     * fixes nothing, because WebView was never at fault.
-                     *
-                     * It is also why the crash recorder added earlier stayed empty:
-                     * no Java exception is ever thrown, so an uncaught-exception
-                     * handler has nothing to catch.
-                     */
-                    override fun onRenderProcessGone(
-                        view: WebView, detail: android.webkit.RenderProcessGoneDetail
-                    ): Boolean {
-                        rendererDeaths++
-                        // The dead WebView can never be reused; it must be detached
-                        // and destroyed before a replacement is built.
-                        handler.post {
-                            try { view.destroy() } catch (e: Exception) { }
-                            if (webView === view) webView = null
-                            initWebView()
-                            finishCheck(checkGeneration, stalled = true)
-                        }
-                        return true
                     }
                 }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    // Qualified. This is the line that used to resolve to
+                    // View.getHandler() and throw on null every time; naming the
+                    // class means it can never quietly bind to anything else.
+                    this@MonitorService.handler.postDelayed({
+                        // Wrapped because this runs on the main thread from a
+                        // WebView callback: anything thrown here closes the
+                        // app, and Android reports that as a WebView fault.
+                        try {
+                            if (assetError != null) {
+                                finishCheck(checkGeneration, stalled = true)
+                                return@postDelayed
+                            }
+                            view.evaluateJavascript(filtersJs, null)
+                            view.evaluateJavascript(
+                                scanJs.replace("__CONFIG__", configJson(checkGeneration)),
+                                null
+                            )
+                        } catch (e: Exception) {
+                            // Free the latch, or no further check is ever run.
+                            finishCheck(checkGeneration, stalled = true)
+                        }
+                    }, RENDER_WAIT)
+                }
+
+                override fun shouldOverrideUrlLoading(
+                    view: WebView, request: WebResourceRequest
+                ): Boolean = false
+
+                /**
+                 * The renderer died. Returning true keeps this app alive.
+                 *
+                 * Worth correcting the record this comment used to carry: it
+                 * called itself "the whole bug", and it was not. It is a real
+                 * crash and this override is a real fix, but the reason the app
+                 * announced nothing was the handler above resolving to
+                 * View.getHandler(). No scan had ever run to be interrupted.
+                 *
+                 * A WebView runs the page in a separate
+                 * renderer process, and when that process is killed - which
+                 * Android does readily to a background app holding a page as
+                 * heavy as Facebook - the default behaviour is to kill the app
+                 * that owned it. Android then reports it as "The installed
+                 * version of WebView caused TV Monitor to crash" and offers to
+                 * uninstall WebView updates, which is a system-wide change that
+                 * fixes nothing, because WebView was never at fault.
+                 *
+                 * It is also why the crash recorder added earlier stayed empty:
+                 * no Java exception is ever thrown, so an uncaught-exception
+                 * handler has nothing to catch.
+                 */
+                override fun onRenderProcessGone(
+                    view: WebView, detail: android.webkit.RenderProcessGoneDetail
+                ): Boolean {
+                    rendererDeaths++
+                    // The dead WebView can never be reused; it must be detached
+                    // and destroyed before a replacement is built.
+                    this@MonitorService.handler.post {
+                        try { view.destroy() } catch (e: Exception) { }
+                        if (webView === view) webView = null
+                        initWebView()
+                        finishCheck(checkGeneration, stalled = true)
+                    }
+                    return true
+                }
             }
+
+            // Published only once it is fully built and its client is attached.
+            webView = wv
         }
     }
 
