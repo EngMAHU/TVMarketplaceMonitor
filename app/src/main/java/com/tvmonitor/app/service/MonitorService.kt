@@ -118,6 +118,21 @@ class MonitorService : Service() {
             )
         )
 
+        /** Pull-to-refresh. Handled in onStartCommand. */
+        const val ACTION_CHECK_NOW = "com.tvmonitor.app.CHECK_NOW"
+
+        // A manual check is still a request to Facebook, and the rate is what
+        // cost the laptop its access. Thirty seconds keeps a pull responsive
+        // without letting a few impatient ones turn into a burst.
+        private const val MANUAL_MIN_GAP = 30_000L
+
+        fun checkNow(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, MonitorService::class.java).setAction(ACTION_CHECK_NOW)
+            )
+        }
+
         fun start(context: Context) {
             ContextCompat.startForegroundService(
                 context, Intent(context, MonitorService::class.java)
@@ -157,6 +172,8 @@ class MonitorService : Service() {
     // The last scan's counts, so the ongoing notification can name the reason
     // for a silence rather than just showing the time it last stayed silent.
     @Volatile private var lastReport: ScanStatus.Report? = null
+
+    private var lastManualCheck = 0L
 
     // Which check is in flight. Every check gets a new number, and only a report
     // carrying the current one is allowed to end it - see finishCheck.
@@ -236,6 +253,28 @@ class MonitorService : Service() {
         } catch (e: Exception) {
             // Left false, so onPageStarted injects the old way instead.
         }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CHECK_NOW) checkNow()
+        return START_STICKY
+    }
+
+    /**
+     * Brings the next check forward, within reason.
+     *
+     * Deliberately not a bypass of the interval. The rate is the one thing that
+     * has already cost a working channel once, so a pull that lands during a
+     * check, or within thirty seconds of the last one, is simply ignored rather
+     * than queued - the trader gets the scan that is already running.
+     */
+    private fun checkNow() {
+        val now = System.currentTimeMillis()
+        if (now - lastManualCheck < MANUAL_MIN_GAP) return
+        lastManualCheck = now
+        if (isChecking) return
+        handler.removeCallbacks(checkRunnable)
+        handler.post(checkRunnable)
     }
 
     @SuppressLint("WakelockTimeout")
@@ -489,7 +528,13 @@ class MonitorService : Service() {
                     location = o.optString("location", ""),
                     url = o.optString(
                         "url", "https://www.facebook.com/marketplace/item/$id"
-                    )
+                    ),
+                    // JSON null and a missing key both mean the age was never
+                    // learned, and both must stay null rather than becoming 0 -
+                    // "listed 0 minutes ago" would be the most misleading thing
+                    // the app could possibly say.
+                    ageMinutes = if (o.isNull("ageMinutes")) null
+                                 else o.optInt("ageMinutes").takeIf { it >= 0 }
                 )
             )
         }

@@ -87,6 +87,22 @@ object NotificationHelper {
         context.getSystemService(NotificationManager::class.java).cancel(SIGNED_OUT_ID)
     }
 
+    /**
+     * " · 4 min old", or nothing when the age was never learned.
+     *
+     * Silence is deliberate for the unknown case. Inventing a number, or writing
+     * "0 min", would make an undated listing look like the freshest one in the
+     * batch - and undated listings are the ones most likely to be stale.
+     */
+    private fun agePart(listing: Listing): String {
+        val minutes = listing.ageMinutes ?: return ""
+        return when {
+            minutes < 1 -> " · just listed"
+            minutes < 60 -> " · $minutes min old"
+            else -> " · ${minutes / 60}h old"
+        }
+    }
+
     fun notifyNewListings(context: Context, listings: List<Listing>) {
         val nm = context.getSystemService(NotificationManager::class.java)
 
@@ -101,7 +117,10 @@ object NotificationHelper {
                 nextId++,
                 NotificationCompat.Builder(context, CHANNEL_LISTINGS)
                     .setSmallIcon(R.drawable.ic_tv)
-                    .setContentTitle("New TV: ${listing.price}")
+                    // The age belongs in the title, next to the price. It is the
+                    // figure that decides whether this is worth dropping
+                    // everything for, and it was not shown anywhere at all.
+                    .setContentTitle("New TV: ${listing.price}${agePart(listing)}")
                     .setContentText(listing.title)
                     .setSubText(listing.location)
                     .setAutoCancel(true)
@@ -116,7 +135,9 @@ object NotificationHelper {
             )
             val style = NotificationCompat.InboxStyle()
                 .setBigContentTitle("${listings.size} New TVs Found")
-            listings.take(5).forEach { style.addLine("${it.price} - ${it.title}") }
+            listings.take(5).forEach {
+                style.addLine("${it.price}${agePart(it)} - ${it.title}")
+            }
             if (listings.size > 5) style.setSummaryText("+${listings.size - 5} more")
 
             nm.notify(

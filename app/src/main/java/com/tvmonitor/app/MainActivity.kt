@@ -36,6 +36,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scanSourceText: TextView
     private lateinit var scanCountsText: TextView
     private lateinit var scanRejectsText: TextView
+    private lateinit var swipeRefresh: SwipeRefreshLayout
+    private var awaitingRefresh = false
+
+    private companion object {
+        // Long enough to cover a page load plus the ten-second render wait, and
+        // short enough that a spinner never outlives the trader's patience.
+        const val REFRESH_SPINNER_TIMEOUT = 25_000L
+    }
 
     private val notifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -61,7 +69,7 @@ class MainActivity : AppCompatActivity() {
             Settings.setRequireKnownAge(this, checked)
         }
         val recyclerView = findViewById<RecyclerView>(R.id.listingsRecycler)
-        val swipeRefresh = findViewById<SwipeRefreshLayout>(R.id.swipeRefresh)
+        swipeRefresh = findViewById(R.id.swipeRefresh)
 
         adapter = ListingAdapter { listing ->
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(listing.url)))
@@ -70,8 +78,23 @@ class MainActivity : AppCompatActivity() {
         recyclerView.layoutManager = LinearLayoutManager(this)
         recyclerView.adapter = adapter
 
+        // Pull to refresh used to stop its own spinner and do nothing else - a
+        // gesture that looked like it worked and never asked Facebook anything.
         swipeRefresh.setOnRefreshListener {
-            swipeRefresh.isRefreshing = false
+            if (!MonitorService.isRunning) {
+                swipeRefresh.isRefreshing = false
+                statusText.text = "Start monitoring first"
+                return@setOnRefreshListener
+            }
+            MonitorService.checkNow(this)
+            // The spinner stops when the scan reports back, so it means what it
+            // looks like. The timeout is the backstop for a check that is
+            // refused for coming too soon, or one the watchdog has to end.
+            awaitingRefresh = true
+            swipeRefresh.postDelayed({
+                awaitingRefresh = false
+                swipeRefresh.isRefreshing = false
+            }, REFRESH_SPINNER_TIMEOUT)
         }
 
         val db = AppDatabase.getInstance(this)
@@ -125,6 +148,13 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showScanReport(report: ScanStatus.Report?) {
         if (report == null) return
+
+        // A scan reported, so a pull that was waiting on one is answered.
+        if (awaitingRefresh) {
+            awaitingRefresh = false
+            swipeRefresh.isRefreshing = false
+        }
+
         val time = SimpleDateFormat("HH:mm", Locale.UK).format(Date(report.at))
 
         scanSourceText.text = "${report.source} - $time"

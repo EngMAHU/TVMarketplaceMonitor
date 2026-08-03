@@ -35,7 +35,7 @@ class ListingAdapter(
         holder.title.text = listing.title
         holder.price.text = listing.price
         holder.location.text = listing.location
-        holder.time.text = timeAgo(listing.discoveredAt)
+        holder.time.text = age(listing)
 
         if (listing.imageUrl.isNotBlank()) {
             Glide.with(holder.image.context)
@@ -50,10 +50,34 @@ class ListingAdapter(
         holder.itemView.setOnClickListener { onClick(listing) }
     }
 
-    private fun timeAgo(timestamp: Long): String {
+    /**
+     * How long ago the listing was posted - not how long ago this phone saw it.
+     *
+     * The card used to show time since discovery, so a listing that had been up
+     * for fifty minutes read "Just now" the moment it was found. For a trader
+     * whose stock sells in about ten minutes that is worse than showing nothing:
+     * it makes stale listings look like the freshest thing on the screen.
+     *
+     * ageMinutes is fixed at the moment of the scan, so the time that has passed
+     * since is added back on to keep the figure current while the app is open.
+     */
+    private fun age(listing: Listing): String {
+        val posted = listing.ageMinutes
+            ?: return "age unknown - found ${elapsed(listing.discoveredAt)}"
+        val sinceFound = (System.currentTimeMillis() - listing.discoveredAt) / 60_000
+        val total = posted + sinceFound
+        return when {
+            total < 1 -> "Listed just now"
+            total < 60 -> "Listed ${total}m ago"
+            total < 1440 -> "Listed ${total / 60}h ago"
+            else -> "Listed ${total / 1440}d ago"
+        }
+    }
+
+    private fun elapsed(timestamp: Long): String {
         val diff = System.currentTimeMillis() - timestamp
         return when {
-            diff < 60_000 -> "Just now"
+            diff < 60_000 -> "just now"
             diff < 3_600_000 -> "${diff / 60_000}m ago"
             diff < 86_400_000 -> "${diff / 3_600_000}h ago"
             else -> "${diff / 86_400_000}d ago"
