@@ -56,10 +56,36 @@ object ScanStatus {
             )
             return if (parts.isEmpty()) "nothing rejected" else parts.joinToString(", ")
         }
+
+        /** One feed's outcome, short enough for a list of all of them. */
+        fun oneLine(): String = when {
+            error != null -> "$source: scan failed"
+            blank -> "$source: empty"
+            else -> "$source: $total read, $kept passed"
+        }
     }
 
     private val _latest = MutableLiveData<Report?>(null)
     val latest: LiveData<Report?> = _latest
 
-    fun post(report: Report) = _latest.postValue(report)
+    /**
+     * The last result from every feed, not just the most recent one.
+     *
+     * The single latest report cannot answer the question that matters when
+     * nothing is coming through: is one feed broken, or all of them? Those need
+     * opposite responses - fix a URL, or look at the login and the page itself -
+     * and with four feeds read ten minutes apart, watching them go past one at a
+     * time to find out is a poor use of a day.
+     */
+    private val bySource = LinkedHashMap<String, Report>()
+    private val _feeds = MutableLiveData<List<Report>>(emptyList())
+    val feeds: LiveData<List<Report>> = _feeds
+
+    fun post(report: Report) {
+        _latest.postValue(report)
+        synchronized(bySource) {
+            bySource[report.source] = report
+            _feeds.postValue(bySource.values.toList())
+        }
+    }
 }

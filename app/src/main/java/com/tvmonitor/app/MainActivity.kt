@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scanSourceText: TextView
     private lateinit var scanCountsText: TextView
     private lateinit var scanRejectsText: TextView
+    private lateinit var feedSummaryText: TextView
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private var awaitingRefresh = false
 
@@ -60,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         scanSourceText = findViewById(R.id.scanSourceText)
         scanCountsText = findViewById(R.id.scanCountsText)
         scanRejectsText = findViewById(R.id.scanRejectsText)
+        feedSummaryText = findViewById(R.id.feedSummaryText)
 
         val requireAgeSwitch = findViewById<SwitchCompat>(R.id.requireAgeSwitch)
         requireAgeSwitch.isChecked = Settings.requireKnownAge(this)
@@ -104,6 +106,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         ScanStatus.latest.observe(this) { report -> showScanReport(report) }
+
+        // Every feed's last result, so one look answers whether a single source
+        // is broken or the whole thing is.
+        ScanStatus.feeds.observe(this) { reports ->
+            feedSummaryText.visibility = if (reports.isEmpty()) View.GONE else View.VISIBLE
+            feedSummaryText.text = reports.joinToString("\n") { it.oneLine() }
+        }
 
         toggleBtn.setOnClickListener { toggleMonitoring() }
         logoutBtn.setOnClickListener { logout() }

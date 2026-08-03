@@ -95,6 +95,15 @@
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 
+        <TextView
+            android:id="@+id/feedSummaryText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
         <androidx.appcompat.widget.SwitchCompat
             android:id="@+id/requireAgeSwitch"
             android:layout_width="match_parent"

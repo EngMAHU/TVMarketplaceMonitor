@@ -93,13 +93,16 @@ class MonitorService : Service() {
         private val SOURCES = listOf(
             Source(
                 "Liverpool search",
-                "https://www.facebook.com/marketplace/liverpool/search/" +
+                // No trailing slash before the query string. Facebook's own
+                // search URL is /search?query=..., and the first build of this
+                // wrote /search/?query=... which came back with no cards at all.
+                "https://www.facebook.com/marketplace/liverpool/search" +
                 "?query=tv&sortBy=creation_time_descend&daysSinceListed=1" +
                 "&radius=113&exact=false"
             ),
             Source(
                 "Manchester search",
-                "https://www.facebook.com/marketplace/manchester/search/" +
+                "https://www.facebook.com/marketplace/manchester/search" +
                 "?query=tv&sortBy=creation_time_descend&daysSinceListed=1" +
                 "&radius=30&exact=false"
             ),
